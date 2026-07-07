@@ -30,8 +30,8 @@ models:
     cmd: "${srv} -m ${models}/judge-gpt-oss-20b/gpt-oss-20b-Q4_K_M.gguf -ngl 999 -c 16384"
     ttl: 300
     checkEndpoint: /health
-  auditor:                  # Mistral-Small-3.2-24B — fits on GPU, cap ctx  [path verify on download]
-    cmd: "${srv} -m ${models}/auditor-mistral-24b/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf -ngl 999 -c 16384"
+  auditor:                  # Mistral-Small-3.2-24B — dense 24B doesn't fit ~13.5GB usable
+    cmd: "${srv} -m ${models}/auditor-mistral-24b/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf -ngl 30 -c 8192"
     ttl: 300
     checkEndpoint: /health
 

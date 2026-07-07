@@ -27,7 +27,7 @@ def _finish(L, task, traj, extra) -> dict:
 
 
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
-             ledger_dir=None, max_turns: int | None = None) -> dict:
+             ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False) -> dict:
     L = Ledger(ledger_dir=ledger_dir)
     sb = Sandbox()
     task = Task(spec)
@@ -52,9 +52,23 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
         task.transition("rejected"); traj.append(task.state)
         return _finish(L, task, traj, {"rejected_at": "dod_authoring", "reason": bad})
 
+    # Gate 0c: the cross-family premise panel (optional — a real gate that surfaces
+    # gameable/misaligned checks to the human, not a blocker; the human decides)
+    finding = None
+    if premise_panel:
+        from . import panel as _panel
+        finding = _panel.review_spec(spec)
+        L.append(EventType.GATE, {"gate": "premise_panel", "verdict": finding["panel_verdict"],
+                                  "per_seat": finding["per_seat"], "reasons": finding["reasons"]})
+
     # Human approval over the real channel (a model has no action that reaches this)
-    decision = approvals.request(
-        spec.id, f"Spec {spec.id}: {spec.user_story}\nDoD checks: {[c.name for c in spec.dod]}")
+    summary_line = f"Spec {spec.id}: {spec.user_story}\nDoD checks: {[c.name for c in spec.dod]}"
+    if finding and finding["flagged"]:
+        summary_line += ("\n\n[PREMISE PANEL FLAGGED this spec as UNSOUND — checks may pass while the "
+                         "story is violated]\n" + "\n".join(
+            f"  - {n}: {finding['reasons'].get(n,'')}" for n in finding["per_seat"]
+            if finding["per_seat"][n] == "unsound"))
+    decision = approvals.request(spec.id, summary_line)
     if decision != "approve":
         task.transition("rejected"); traj.append(task.state)
         return _finish(L, task, traj, {"rejected_at": "approval", "reason": "not approved by human"})

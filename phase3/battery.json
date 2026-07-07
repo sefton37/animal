@@ -1,0 +1,572 @@
+{
+  "cases": [
+    {
+      "id": "c01",
+      "subsystem": "graphics",
+      "user_story": "As a player exploring the open world, I want the sky to transition smoothly through dawn, day, dusk, and night over a 24-minute real-time cycle, with the sun arcing and colors blending gradually so the world never visibly 'snaps' from one lighting state to the next.",
+      "dod_checks": [
+        "Sun elevation is a continuous function of game-time sampled every frame over a full cycle; max frame-to-frame delta stays below the bounded threshold (no discrete jumps).",
+        "Horizon sky color at any time t equals the lerp of the authored gradient keyframes; adjacent-frame color delta < epsilon across the whole cycle.",
+        "One full day/night cycle completes in 24 real minutes (+/- 2s), measured by an automated timer.",
+        "An automated headless flythrough records one full cycle and reports zero frames where per-pixel luminance delta from the prior frame exceeds the popping threshold."
+      ],
+      "premise": "The user wants a smooth, gradual, continuous day/night transition with no visible popping between lighting states.",
+      "ground_truth": "sound",
+      "rationale": "Each check maps directly to an element of the story: continuity of sun motion, gradual color blending, the exact 24-minute cadence, and an end-to-end no-pop assertion. Passing all four requires the smooth cycle the user described; there is no way to satisfy them while violating the intent."
+    },
+    {
+      "id": "c02",
+      "subsystem": "games",
+      "user_story": "As a player in a third-person action game, I want the camera to never clip through walls or reveal the void — when I back into a corner or a very tight passage it should pull in tight against my character, even going nearly first-person if the space is that cramped, rather than showing geometry.",
+      "dod_checks": [
+        "A raycast from the character to the desired camera position shortens the camera boom to the hit distance when geometry is struck.",
+        "Camera-to-character distance is always kept at or above the 1.5m minimum clamp for framing comfort.",
+        "Camera position interpolates smoothly (no teleport) when the boom length changes.",
+        "In the sample-level test rooms, an automated capture reports no wall geometry rendered between the camera and the character across 20 sampled positions."
+      ],
+      "premise": "The camera can always avoid clipping while never coming closer than 1.5m to the character.",
+      "ground_truth": "unsound",
+      "rationale": "The story explicitly wants the camera to pull all the way in — even to near-first-person — in spaces tighter than 1.5m so it never clips. The 1.5m minimum clamp directly contradicts that: in any passage narrower than 1.5m the camera physically cannot avoid the wall. The sample-level test rooms are all wider than 1.5m, so every check passes, yet an implementation honoring the clamp will clip through walls in the exact cramped spaces the user called out. Checks green, story violated."
+    },
+    {
+      "id": "c03",
+      "subsystem": "graphics",
+      "user_story": "As a player, I want distant forests to keep the framerate high by using simpler tree meshes far away, but I don't want to see trees visibly 'pop' between detail levels as I move — the transitions should be imperceptible.",
+      "dod_checks": [
+        "A tree's rendered polygon count at 200m is under 25% of its count at 10m.",
+        "LOD switches use an alpha-dither cross-fade spanning at least 8 frames rather than an instantaneous mesh swap.",
+        "A fly-by benchmark through 5000 trees sustains >= 60fps.",
+        "A recorded fly-by shows no single-frame silhouette pop at LOD-transition distances (structural-similarity between consecutive frames stays above the threshold at every boundary)."
+      ],
+      "premise": "The user wants distant geometry simplified for performance without any visible popping during transitions.",
+      "ground_truth": "sound",
+      "rationale": "The checks cover both halves of the story: real polygon reduction with distance plus a framerate target (the performance goal), and a cross-fade span plus an end-to-end no-pop similarity assertion (the imperceptibility goal). Satisfying all four necessarily produces the behavior described; there is no encoded assumption the story rejects."
+    },
+    {
+      "id": "c04",
+      "subsystem": "physics",
+      "user_story": "As a player, when an enemy dies I want its body to ragdoll and settle naturally wherever it falls — draped over slopes, slumped on stairs, or crumpled into a ditch — so the death looks physically believable on any terrain, not just flat ground.",
+      "dod_checks": [
+        "On death the ragdoll is activated and all rigid bodies simulate under gravity and collision.",
+        "The ragdoll reaches rest (max body-part speed < 0.05 m/s) within 3 seconds.",
+        "At rest, every body part's origin has y >= 0 (i.e., the body is above the ground plane).",
+        "At rest, no body part interpenetrates the collision mesh by more than 5cm."
+      ],
+      "premise": "Characters die and come to rest on ground located at the y=0 plane.",
+      "ground_truth": "unsound",
+      "rationale": "The 'y >= 0' resting constraint silently assumes the ground is the flat y=0 plane, but the story explicitly wants natural settling on slopes, stairs, and ditches — terrain that dips below y=0. An implementation that clamps resting body parts up to y>=0 leaves corpses floating above any sunken terrain while still passing the rest, timing, and no-interpenetration checks (floating up doesn't interpenetrate). All checks pass, yet bodies in ditches hover instead of settling — exactly the case the user cared about. The false premise is subtle because y>=0 reads like a reasonable 'don't sink through the floor' sanity check."
+    },
+    {
+      "id": "c05",
+      "subsystem": "games",
+      "user_story": "As a player managing a grid inventory, I want to drag items and have them snap cleanly into grid cells, with the game preventing me from ever stacking two items onto the same cells, including for larger multi-cell items.",
+      "dod_checks": [
+        "A dropped item snaps its anchor to the nearest grid cell within the snap radius.",
+        "A drop targeting any already-occupied cell is rejected and the item returns to its origin.",
+        "A multi-cell (e.g. 2x2) item validates that all covered cells are free before placement is allowed.",
+        "After a successful placement, all cells the item covers are marked occupied and block subsequent drops."
+      ],
+      "premise": "The user wants grid snapping with no overlapping items, correct for both single- and multi-cell items.",
+      "ground_truth": "sound",
+      "rationale": "The checks encode each stated requirement: snapping to cells, rejecting occupied targets, whole-footprint validation for multi-cell items, and occupancy bookkeeping that enforces no-overlap going forward. An implementation passing all four delivers precisely the non-overlapping snapping inventory the user described."
+    },
+    {
+      "id": "c06",
+      "subsystem": "simulation",
+      "user_story": "As a player, I want world generation to be seed-based and reproducible so I can post a seed online and a friend on a different computer gets the exact same world I did — same continents, same mountains, same layout.",
+      "dod_checks": [
+        "Given seed S, generating the heightmap twice within one running session produces byte-identical arrays (hash match).",
+        "A static grep of the generation code path confirms no calls to system time or OS entropy for seeding.",
+        "Saving and reloading within the session regenerates the visited chunks identically.",
+        "All noise sampling is driven from the seeded PRNG, verified by unit test."
+      ],
+      "premise": "Reproducibility means the same build in the same session reliably repeats its output from a seed.",
+      "ground_truth": "unsound",
+      "rationale": "Every check verifies only same-process, same-binary repeatability, but the story's whole point is cross-machine seed sharing. Nothing tests platform-independent determinism — floating-point/FMA/SIMD differences, a standard-library PRNG whose algorithm varies by implementation, or unordered container iteration can all produce a different world on a friend's machine while passing all four checks (which never leave one build on one CPU). The generator can be fully 'deterministic' by these checks and still betray the shared-seed promise. The gap is subtle because same-session reproducibility looks like exactly what the story asked for."
+    },
+    {
+      "id": "c07",
+      "subsystem": "games",
+      "user_story": "As a player using a hitscan weapon, I want shots to register precisely on whatever is directly under my crosshair, with recoil widening the spread as I keep firing so sustained fire gets less accurate.",
+      "dod_checks": [
+        "The ray originates at the camera position and travels through the screen-center crosshair direction.",
+        "The current recoil state applies a spread cone; at zero recoil the ray is exactly crosshair-center.",
+        "A hit is the first collider intersected along the ray, and damage is applied to that entity's hurtbox.",
+        "An automated test firing at a target dummy under the crosshair at several ranges (zero spread) registers a hit every time."
+      ],
+      "premise": "The user wants precise crosshair-aligned hitscan with recoil-driven spread growth.",
+      "ground_truth": "sound",
+      "rationale": "The checks capture both story elements: crosshair-accurate ray origin/direction with a guaranteed dead-center shot at zero recoil (precision), a spread cone tied to recoil state (accuracy degrades with sustained fire), and correct first-hit damage resolution. Passing them yields the exact weapon behavior described, with no assumption the story rejects."
+    },
+    {
+      "id": "c08",
+      "subsystem": "physics",
+      "user_story": "As a player, I want my character to move and jump identically no matter my framerate — someone at 30fps, 60fps, or 144fps should cover the same distance in the same time and reach the same jump height, so the game feels fair across hardware.",
+      "dod_checks": [
+        "Movement applies velocity in meters/second multiplied by frame deltaTime.",
+        "At 60fps the character traverses 10m of flat ground in 2.00s (+/- 0.02s).",
+        "Run speed is stored as a m/s value, not a per-frame constant (verified by grep).",
+        "No hard-coded per-frame position increments exist in the movement code path (verified by grep)."
+      ],
+      "premise": "Multiplying motion by deltaTime each frame makes the character's movement and jumps framerate-independent.",
+      "ground_truth": "unsound",
+      "rationale": "The checks only validate horizontal constant-velocity motion, and only at 60fps. But the story demands identical behavior including jump height across 30/60/144fps. Naive deltaTime-scaled Euler integration of gravity is NOT framerate-independent — jump apex and arc drift with timestep unless a fixed-timestep accumulator is used. An implementation with per-frame Euler gravity passes all four checks (velocity is in m/s, deltaTime is applied, the 60fps horizontal test hits 2s) yet produces different jump heights at 30 vs 144fps, violating the fairness-across-hardware intent. The premise that 'deltaTime multiply = framerate independence' is a common and plausible half-truth, and the checks never exercise jumps or off-60fps rates that would expose it."
+    },
+    {
+      "id": "c09",
+      "subsystem": "auth / session-management",
+      "user_story": "As a user of an online banking dashboard, I want to be automatically logged out after 15 minutes of INACTIVITY so my session can't be hijacked if I walk away from my desk. But as long as I'm actively using the app, I should never be interrupted or forced to log in again.",
+      "dod_checks": [
+        "Authenticate, then idle 15m01s with no requests; next API call returns HTTP 401 and redirects to /login. Assert status==401.",
+        "Authenticate, make a request at t=14m, then idle another 14m; assert still authenticated (200) — the idle timer resets on each request (sliding expiration).",
+        "grep -n 'slidingExpiration\\|resetIdleTimer\\|touchSession' src/middleware/session.* returns >=1 match; assert no absolute max-lifetime cap is enforced.",
+        "Drive continuous activity (one request every 60s) for 90 minutes; assert the user is never forced to re-authenticate (no 401 over the whole window)."
+      ],
+      "premise": "Logout is driven purely by a sliding inactivity window that resets on every request; active users are never interrupted, and there is no absolute session-age cap.",
+      "ground_truth": "sound",
+      "rationale": "The story wants exactly two properties — log out on 15m idle, and never interrupt an actively-working user — and every check maps to one of them (idle expiry, timer reset, no absolute cap, uninterrupted long active session). Passing all four is only achievable by an implementation that satisfies the story; nothing is over- or under-encoded."
+    },
+    {
+      "id": "c10",
+      "subsystem": "auth / password-reset",
+      "user_story": "As a user who forgot my password, I want to request a reset link by email and set a new password. The link should be single-use and expire after an hour. If I later remember my old password before I finish the reset, I should still be able to just log in with it normally.",
+      "dod_checks": [
+        "POST /reset/request with a valid email returns 202 and sends exactly one email containing a tokenized link.",
+        "Using a reset token once succeeds; reusing the same token returns 400 (single-use). Assert second use fails.",
+        "A token older than 60m returns 410 Gone. Assert expired token rejected.",
+        "After POST /reset/request (before the link is used), attempting to log in with the OLD password returns 401 — assert the account's current credential is invalidated the moment a reset is requested.",
+        "grep -n 'invalidateCurrentPassword\\|lockPendingReset' src/auth/reset.* returns >=1 match."
+      ],
+      "premise": "Merely requesting a reset must immediately disable the existing password, so the old credential stops working before the reset link is ever used.",
+      "ground_truth": "unsound",
+      "rationale": "The story explicitly says a user who remembers the old password should still be able to log in normally. Checks 4 and 5 encode the opposite premise — that requesting a reset invalidates the current password on the spot. An implementation can pass every check (single-use, expiring token, old password disabled on request) yet directly violate the story, and worse it hands anyone who knows the victim's email a free account-lockout DoS the story never sanctioned."
+    },
+    {
+      "id": "c11",
+      "subsystem": "security / brute-force-protection",
+      "user_story": "Protect the login endpoint from brute-force guessing: after several failed attempts against an account, throttle further tries with increasing backoff. But a legitimate user who mistypes a couple of times must never be permanently locked out, and users behind a shared corporate NAT must not lock each other out.",
+      "dod_checks": [
+        "Submit 5 wrong passwords for one account; the 6th attempt returns 429 with a Retry-After header. Assert status==429.",
+        "Continued failures produce monotonically increasing Retry-After values (exponential backoff). Assert delay[n+1] > delay[n].",
+        "After a successful login, the failure counter for that account resets to 0. Assert next failure starts the backoff over.",
+        "After waiting the advertised Retry-After window, a correct password succeeds (no permanent lockout). Assert 200.",
+        "Throttling key is the account identifier, not the source IP: two accounts from the same IP throttle independently. Assert account B is unaffected by account A's failures."
+      ],
+      "premise": "Brute-force defense is per-account exponential backoff that self-heals over time and on success, and never permanently locks an account or penalizes IP-sharing users.",
+      "ground_truth": "sound",
+      "rationale": "Each of the story's constraints has a faithful check: throttle after N failures (1,2), no permanent lock / recoverable (3,4), and the shared-NAT concern handled by keying on account rather than IP (5). The checks neither add a requirement the story rejects nor omit one it needs; satisfying them is equivalent to satisfying the story."
+    },
+    {
+      "id": "c12",
+      "subsystem": "crypto / encryption-at-rest",
+      "user_story": "For compliance, the sensitive PII columns (SSN, date of birth) must be encrypted at rest so that if an attacker steals a database dump, they cannot read the PII from it.",
+      "dod_checks": [
+        "SELECT ssn FROM users LIMIT 1 returns ciphertext, not a readable SSN. Assert value does not match SSN regex.",
+        "Application roundtrip: write then read a record returns the original plaintext SSN. Assert decrypt(encrypt(x))==x.",
+        "The encryption key is loaded at startup from the encryption_keys table and used to decrypt on read. Assert key retrieval query succeeds and app boots.",
+        "AES-256-GCM is used for the field cipher. grep -n 'aes-256-gcm' src/crypto/fields.* returns >=1 match.",
+        "A schema migration exists that backfills existing plaintext rows into encrypted form. Assert migration present and idempotent."
+      ],
+      "premise": "The PII is protected as long as the columns hold strong-cipher ciphertext and the app can decrypt it using a key retrieved from the database itself.",
+      "ground_truth": "unsound",
+      "rationale": "The story's whole point is that a stolen DB DUMP must not expose the PII. Check 3 encodes the premise that the decryption key lives in the same database (encryption_keys table). A dump therefore contains both the ciphertext AND the key, so the attacker decrypts everything — the story is fully violated even though every check passes (strong cipher, roundtrip works, key loads, backfill done). The false premise is co-locating the key with the data it protects."
+    },
+    {
+      "id": "c13",
+      "subsystem": "auth / two-factor-TOTP",
+      "user_story": "Let users turn on app-based two-factor (TOTP). During setup show a QR code, require them to enter one valid code to prove their authenticator is configured before 2FA becomes active, and give them one-time recovery codes in case they lose the device.",
+      "dod_checks": [
+        "GET /2fa/setup returns an otpauth:// URI carrying a fresh per-user secret; assert a new random secret per call.",
+        "Submitting a WRONG code during setup leaves 2fa_enabled=false; the account is not protected. Assert flag unchanged.",
+        "Submitting a code generated from the issued secret flips 2fa_enabled=true. Assert activation gated on a valid code.",
+        "On activation, N single-use recovery codes are generated and shown exactly once; re-fetching them later is impossible. Assert codes returned once, not retrievable again.",
+        "Consuming a recovery code marks it used; the same code cannot be reused. Assert second use fails."
+      ],
+      "premise": "2FA is activated only after proof-of-possession of the authenticator, and a one-time recovery-code path exists for device loss.",
+      "ground_truth": "sound",
+      "rationale": "Every element of the story maps to a check: QR/secret issuance (1), activation gated on a valid code with wrong-code leaving it off (2,3), and one-time recovery codes shown once and consumable (4,5). The checks do not demand anything the story rejects and cover the story's stated intent; passing them means the enrollment flow behaves as described."
+    },
+    {
+      "id": "c14",
+      "subsystem": "permissions / RBAC",
+      "user_story": "As an org admin I want a 'read-only auditor' role: an auditor can view every record in the org, including billing, but must not be able to change anything at all.",
+      "dod_checks": [
+        "Auditor GETs /users, /billing, /settings, /reports and receives 200 on each (full read access). Assert all readable.",
+        "Auditor attempts POST /users, PUT /billing, DELETE /settings and receives 403 on each of these three endpoints. Assert each denied.",
+        "grep -n \"role === 'auditor'\" src/authz/policy.* shows the write-denial branch for the listed endpoints.",
+        "A regression test enumerates the three write endpoints above and asserts 403 for the auditor role on each."
+      ],
+      "premise": "'Cannot modify anything' is satisfied by explicitly denying the auditor the specific set of write endpoints enumerated in the checks.",
+      "ground_truth": "unsound",
+      "rationale": "The story says the auditor must not change ANYTHING — a default-deny stance over all writes. The checks encode a denylist premise: block these three named write endpoints. An implementation whose authorization defaults to allow, with hard-coded 403s only on the enumerated routes, passes every check yet lets the auditor mutate data through any endpoint the checklist forgot or that ships later. Passing checks coexists with violating 'cannot modify anything.'"
+    },
+    {
+      "id": "c15",
+      "subsystem": "auth / session-revocation (JWT)",
+      "user_story": "As a user, when I click 'Log out' my session should truly end — the token must no longer be usable afterward, even by someone who managed to copy it before I logged out.",
+      "dod_checks": [
+        "POST /logout responds with Set-Cookie clearing the auth cookie (empty value, Max-Age=0). Assert cookie cleared.",
+        "After logout, the browser sends no auth token; a follow-up request with no token returns 401. Assert unauthenticated.",
+        "The login page is shown after logout and protected pages redirect to /login. Assert redirect.",
+        "grep -n 'res.clearCookie\\|Max-Age=0' src/auth/logout.* returns >=1 match."
+      ],
+      "premise": "Logging out is complete once the client-side token/cookie is cleared so the browser stops presenting it.",
+      "ground_truth": "unsound",
+      "rationale": "The story's load-bearing clause is 'even by someone who copied it' — it demands server-side revocation. With stateless JWTs, clearing the cookie only affects the honest browser; a token copied before logout still validates until it expires because nothing on the server invalidates it. An implementation passing all checks (cookie cleared, no-token request 401, redirect) leaves the copied token fully usable, directly violating the story. The checks test client-side clearing and silently assume that equals revocation."
+    },
+    {
+      "id": "c16",
+      "subsystem": "security / TLS-transport",
+      "user_story": "All traffic to the public site must use HTTPS. Any plain-HTTP request should be redirected to the HTTPS equivalent, and compliant browsers should remember to use HTTPS on their own going forward.",
+      "dod_checks": [
+        "curl -sI http://site/path returns 301 with Location: https://site/path (same host and path preserved). Assert 301 and matching Location.",
+        "The HTTPS response includes Strict-Transport-Security with max-age >= 15552000. Assert header present with a non-trivial max-age.",
+        "openssl s_client to :443 completes a valid TLS handshake with a trusted, unexpired certificate. Assert handshake ok and cert not expired.",
+        "Load the homepage over HTTPS and assert no sub-resource is requested over http:// (no mixed content). Assert all asset URLs are https."
+      ],
+      "premise": "HTTPS is enforced by redirecting plain HTTP to the same HTTPS URL, advertising HSTS so browsers self-upgrade, over a valid cert with no mixed content.",
+      "ground_truth": "sound",
+      "rationale": "The story asks for three things — redirect HTTP to HTTPS, have browsers remember HTTPS, and actually serve valid HTTPS — and the checks cover each: same-URL 301 redirect (1), HSTS with a real max-age for browser self-upgrade (2), a valid handshake/cert (3), plus the no-mixed-content guard (4) that a genuine all-HTTPS site requires. Nothing beyond the story's intent is imposed; passing equals compliance."
+    },
+    {
+      "id": "c17",
+      "subsystem": "ETL / customer record consolidation",
+      "user_story": "We pull customer records nightly from Salesforce, our web signup form, and Zendesk. The same person shows up in more than one source, each with different fields populated -- Salesforce has the phone number, the web form has the mailing address, Zendesk has the support tier. I want one consolidated record per customer that combines everything we know about them across all the sources.",
+      "dod_checks": [
+        "SELECT customer_id, COUNT(*) FROM customers_consolidated GROUP BY customer_id HAVING COUNT(*) > 1 returns 0 rows (exactly one row per customer)",
+        "row count of customers_consolidated <= row count of the raw union of all three sources",
+        "no NULL customer_id appears in customers_consolidated",
+        "pipeline applies drop_duplicates(subset=['customer_id'], keep='first') immediately before the write step"
+      ],
+      "premise": "Consolidating a customer means collapsing to a single representative row per customer_id -- keep one row, discard the rest.",
+      "ground_truth": "unsound",
+      "rationale": "The story asks for field-level MERGE/coalesce across sources (phone from Salesforce, address from the web form, tier from Zendesk combined into one record). The checks only require one row per customer_id and are fully satisfied by dropping duplicate rows and keeping the first occurrence -- which discards the very fields from the other sources the user wanted combined. The keep='first' check actively bakes in the wrong premise, so an implementation can pass all four checks while silently losing the data the user cares about most."
+    },
+    {
+      "id": "c18",
+      "subsystem": "Scheduling / recurring report",
+      "user_story": "Send the operations summary report every business day at 6:00 AM to the ops distribution list. It must not go out on weekends, and it must not go out on company holidays.",
+      "dod_checks": [
+        "schedule fires at 06:00 local time on Mon, Tue, Wed, Thu, Fri (verify exactly 5 triggers across a normal week)",
+        "no trigger occurs on Saturday or Sunday",
+        "for any date present in the company_holidays table, no report is sent that day",
+        "on a normal business day the report is delivered to every address in the ops_distribution list"
+      ],
+      "premise": "A correct run fires on weekdays at 6am, never on weekends, never on holidays, and reaches everyone on the distribution list.",
+      "ground_truth": "sound",
+      "rationale": "Each check maps one-to-one onto a condition the story explicitly states: weekday 6am cadence, weekend exclusion, holiday exclusion, and delivery to the full list. There is no gap and no overreach; passing every check means the story is satisfied."
+    },
+    {
+      "id": "c19",
+      "subsystem": "ML / model retraining and promotion gate",
+      "user_story": "We retrain the fraud model monthly. Fraud tactics shift quickly, so before a new model goes live I want proof that it catches the LATEST fraud we've been seeing. Never promote a model that would miss the newest patterns.",
+      "dod_checks": [
+        "candidate model is retrained on a monthly schedule",
+        "candidate is scored on the labeled benchmark set fraud_benchmark_2026_01 (a frozen set of confirmed fraud cases from January 2026)",
+        "candidate is promoted only if its recall on that benchmark is >= the current production model's recall",
+        "every promotion decision is written to model_promotions with a timestamp"
+      ],
+      "premise": "A model that 'catches the latest fraud' is validated by recall on the frozen January-2026 benchmark being at least as high as production's.",
+      "ground_truth": "unsound",
+      "rationale": "The promotion gate validates against a static January benchmark, but the story explicitly demands validation against the NEWEST fraud. Under concept drift a candidate can equal or beat production on old January cases while missing this month's new attack patterns -- it passes every check yet violates the stated intent. The recall gate looks rigorous, which is exactly what makes the frozen-benchmark premise a subtle encoding of the wrong definition of 'latest'."
+    },
+    {
+      "id": "c20",
+      "subsystem": "Data quality / inbound file validation",
+      "user_story": "A vendor drops a CSV of invoices into the inbound bucket each morning. If a required column is missing, or if any row has a null in a required field, reject the ENTIRE file -- I never want a partial load. Move the bad file to quarantine and alert the data team.",
+      "dod_checks": [
+        "a file missing any required column is not loaded and is moved to the quarantine bucket",
+        "a file containing a null in any required field on any row is not loaded and is quarantined",
+        "a fully valid file is loaded into the invoices table and is not quarantined",
+        "every rejection triggers an alert to the data-team channel",
+        "after a rejection, zero rows from that file are present in the invoices table"
+      ],
+      "premise": "Correct behavior is all-or-nothing: reject, quarantine, and alert on any missing column or any required-field null; load only fully clean files.",
+      "ground_truth": "sound",
+      "rationale": "Each requirement the story states -- missing column rejection, null rejection, all-or-nothing (zero partial rows), quarantine, and alert -- has a matching deterministic check. There is no assumption beyond what the user asked for, so passing the checks faithfully implies the story is met."
+    },
+    {
+      "id": "c21",
+      "subsystem": "Streaming aggregation / late-arriving data",
+      "user_story": "Our events arrive with lag -- sometimes up to 3 days late. I want the daily active-user aggregates to be EVENTUALLY CORRECT: when late events for a past day finally show up, recompute that day so its number gets fixed.",
+      "dod_checks": [
+        "the aggregation job runs once per day",
+        "the job aggregates all events whose event_time falls on the current run date",
+        "re-running the job for a given date produces an identical result (idempotent)",
+        "no user is counted more than once within a single day's aggregate"
+      ],
+      "premise": "Daily aggregation means processing the events stamped with the current run date; correctness is fully captured by idempotency and no double-counting.",
+      "ground_truth": "unsound",
+      "rationale": "The checks only ever process events whose event_time equals the run date, so events that arrive late for PRIOR days are never folded back in -- precisely the behavior the story requires. The idempotency and no-double-count checks look rigorous and pass cleanly, masking that late-arriving data for past days is silently dropped. The 'process current day only' premise directly contradicts 'recompute the affected past day when late data arrives.'"
+    },
+    {
+      "id": "c22",
+      "subsystem": "CDC / incremental warehouse sync",
+      "user_story": "Keep the warehouse orders table in sync with the OLTP orders table every 15 minutes, incrementally. New orders and edits to existing orders should show up, and when an order is soft-deleted in OLTP (its deleted_at is set), mark it deleted in the warehouse too. Use updated_at as the watermark.",
+      "dod_checks": [
+        "rows with updated_at > the last stored watermark are upserted into the warehouse on each run",
+        "an edited order (updated_at advanced) overwrites its prior warehouse row rather than duplicating it",
+        "an order whose deleted_at is set in OLTP is flagged as deleted in the warehouse",
+        "the stored watermark advances to the maximum updated_at processed after each run"
+      ],
+      "premise": "Sync means upsert everything changed since the watermark, reflect soft-deletes as delete flags, and advance the watermark.",
+      "ground_truth": "sound",
+      "rationale": "Inserts (new rows past watermark), updates (overwrite on advanced updated_at), soft-deletes (delete flag), and watermark advancement each have a faithful check that matches the story's stated behavior. No check assumes anything the story does not want."
+    },
+    {
+      "id": "c23",
+      "subsystem": "ML / feature engineering with temporal cutoff",
+      "user_story": "Build the training feature table for our next-day store sales forecast. The critical rule: for each store-day row, every feature may use only information available AS OF THAT DAY -- no peeking at the future, or the model will look great in backtest and then fail in production.",
+      "dod_checks": [
+        "the feature table has exactly one row per (store_id, date) across the training grid",
+        "each row includes a 7-day rolling average of sales computed over the window [date-3, date+3]",
+        "each row includes the target column target = sales on date+1",
+        "row count == count(distinct store_id) * count(distinct date)"
+      ],
+      "premise": "A centered 7-day rolling window ([date-3, date+3]) is an acceptable feature under the 'only information available as of that day' rule.",
+      "ground_truth": "unsound",
+      "rationale": "The centered window pulls in sales from date+1, +2, and +3 -- future information relative to the row's own date, which is direct leakage. The story's core rule is that features use only information available as of that day. Because the check hard-codes the [date-3, date+3] window, a faithful implementation of the checks GUARANTEES the leakage the story forbids. Every check passes while the stated intent is violated."
+    },
+    {
+      "id": "c24",
+      "subsystem": "Orchestration / DAG dependency gating",
+      "user_story": "The exec dashboard refresh should run only after BOTH the sales ETL and the inventory ETL have finished successfully. If either upstream fails, don't refresh -- I'd rather see yesterday's complete numbers than a half-updated dashboard.",
+      "dod_checks": [
+        "the dashboard_refresh task declares dependencies on both sales_etl and inventory_etl",
+        "dashboard_refresh executes only when both upstream tasks report success within the same run",
+        "if either upstream task fails, dashboard_refresh is skipped and does not execute",
+        "on a skip, the previously published dashboard data is left unchanged"
+      ],
+      "premise": "Refresh only when both upstreams succeed; on any upstream failure, skip the refresh and retain the prior (complete) data.",
+      "ground_truth": "sound",
+      "rationale": "The both-upstream dependency, the both-success execution gate, the skip-on-failure behavior, and the retain-stale-data-on-skip each map directly onto an explicit clause of the story. The checks encode exactly what the user asked for, with no overreaching assumption."
+    },
+    {
+      "id": "c25",
+      "subsystem": "API gateway rate limiting",
+      "user_story": "As a mobile client developer, when I exceed the API's rate limit I need the server to reject the extra requests right away and tell me when I can retry (429 + Retry-After), so my app can immediately show a 'slow down' state instead of hanging on requests that quietly wait in line.",
+      "dod_checks": [
+        "Fire 100 requests within 1s against a configured limit of 10 req/s; assert all 100 eventually return HTTP 200.",
+        "Assert that no request in the burst returns HTTP 429.",
+        "Under sustained over-limit load, assert p99 request latency stays bounded because the excess is drained smoothly from the queue within each window.",
+        "Assert delayed requests carry a Retry-After header once they are finally served."
+      ],
+      "premise": "Enforcing a rate limit means queuing/delaying excess requests until capacity frees, and never rejecting them.",
+      "ground_truth": "unsound",
+      "rationale": "The story explicitly wants fast rejection (429) so the client can back off, but the checks bake in the opposite mechanism: 'all 100 return 200' and 'no request returns 429' force a queuing/leaky-bucket implementation. A build that silently queues excess requests passes every check yet violates the story — the client hangs instead of getting the immediate throttle signal it asked for. Queuing is a legitimate rate-limit technique in general, which is what makes the wrong premise plausible."
+    },
+    {
+      "id": "c26",
+      "subsystem": "HTTP conditional caching (ETag)",
+      "user_story": "As an API consumer, I want conditional GETs so that when my cached copy is still current the server returns 304 Not Modified and I save bandwidth, but I still get the full fresh body once the resource has actually changed.",
+      "dod_checks": [
+        "GET on the resource returns a strong ETag response header.",
+        "A repeat GET with If-None-Match equal to the current ETag returns 304 with an empty body.",
+        "After the resource is mutated, a GET with If-None-Match carrying the old ETag returns 200 plus a new, different ETag.",
+        "304 responses carry no message body (Content-Length 0 / no payload)."
+      ],
+      "premise": "Correct conditional caching returns 304 only while the representation is unchanged and returns a fresh 200 with a new validator once it changes.",
+      "ground_truth": "sound",
+      "rationale": "Each check maps directly onto a clause of the story: 304-on-match saves bandwidth, 200-with-new-ETag after mutation guarantees freshness, and empty-body-on-304 is the mechanism that produces the bandwidth saving. There is no gap an implementation could satisfy the checks through while still violating the intent."
+    },
+    {
+      "id": "c27",
+      "subsystem": "HTTP client retry policy",
+      "user_story": "As a payments integrator, I want my HTTP client to automatically retry transient failures on read-only/idempotent calls, but it must NEVER retry a payment submission, because a duplicate POST could double-charge the customer.",
+      "dod_checks": [
+        "Simulate a 503 response; assert the client retries the failed request up to 3 times with exponential backoff.",
+        "Assert the retry behavior fires uniformly across GET, PUT, POST, and DELETE.",
+        "On a persistently failing endpoint, assert the total number of attempts equals 4 (1 initial + 3 retries).",
+        "Assert backoff intervals grow exponentially (e.g., 100ms, 200ms, 400ms) between attempts."
+      ],
+      "premise": "Every failed request, regardless of HTTP method or idempotency, should be retried on transient errors.",
+      "ground_truth": "unsound",
+      "rationale": "The story draws a hard line: read-only calls retry, payment POSTs must not. But the second and third checks demand uniform retry across all methods including POST, encoding a 'retry everything' premise. An implementation that retries a charge POST passes every check and can double-charge the customer — exactly the harm the story forbids. Uniform, thorough-looking retry is the plausible trap."
+    },
+    {
+      "id": "c28",
+      "subsystem": "Cursor-based pagination",
+      "user_story": "As a dashboard developer consuming a fast-changing feed, I want cursor-based pagination so that when new records are inserted between my page fetches I don't get duplicate items or skip over items — stable paging over a shifting dataset.",
+      "dod_checks": [
+        "The first page returns a list of items plus an opaque next_cursor token.",
+        "Fetching with the returned next_cursor yields the subsequent items with zero overlap against the first page.",
+        "Insert a new record at the head of the feed between page 1 and page 2 fetches; assert page 2 contains no duplicated or skipped items relative to what page 1 already returned.",
+        "A response with an absent/null next_cursor signals that the final page has been reached."
+      ],
+      "premise": "Cursor pagination must produce a stable, non-overlapping, non-skipping traversal even when the underlying dataset changes between fetches.",
+      "ground_truth": "sound",
+      "rationale": "The insertion-between-fetches check is precisely the stability property the story is buying cursor pagination for, and it is the check that would fail an offset-based implementation. Overlap-free continuation and the terminal-cursor check round out the story faithfully with no room to pass while violating intent."
+    },
+    {
+      "id": "c29",
+      "subsystem": "CDN edge cache TTL behavior",
+      "user_story": "As a product-page owner, page-load speed is my top priority. When an edge cache entry's TTL expires I would rather serve the slightly stale cached copy instantly and refresh it in the background (stale-while-revalidate), so a user request never blocks waiting on an origin round-trip.",
+      "dod_checks": [
+        "After an entry's TTL elapses, assert the next request triggers an origin fetch.",
+        "Assert the response served immediately after expiry contains the freshly fetched origin body, not the previously cached copy.",
+        "Assert expired entries are evicted from the cache before any further response is served.",
+        "Assert cache-hit ratio is measured counting only entries still within their TTL."
+      ],
+      "premise": "Once a cache entry's TTL expires it is stale and invalid, so it must be evicted and the request must block on a fresh origin fetch before responding.",
+      "ground_truth": "unsound",
+      "rationale": "The story asks for stale-while-revalidate: serve the stale copy instantly, refresh asynchronously. The checks encode classic blocking-TTL semantics — 'response after expiry contains the fresh body' and 'evict expired before serving' force the request to wait on origin, the exact latency the story wants to avoid. A standard expire-and-refetch cache passes all checks yet makes users wait, violating the top-priority speed requirement. Blocking TTL is the default mental model, which hides the mismatch."
+    },
+    {
+      "id": "c30",
+      "subsystem": "OAuth2 access-token refresh",
+      "user_story": "As an API client, I want to transparently refresh my access token shortly before it expires using the refresh token, so in-flight user requests never fail with a 401 due to token expiry — and if the refresh token itself is invalid I want a clear auth error rather than an endless retry loop.",
+      "dod_checks": [
+        "When the current access token is within the configured skew window of expiry, assert the client performs a refresh_token grant before dispatching the request.",
+        "Assert a request that would otherwise have carried an expired token instead carries the refreshed token and does not receive a 401 for expiry.",
+        "During a refresh, assert concurrent requests share a single refresh call rather than each triggering its own (no thundering herd).",
+        "When the refresh_token is rejected as invalid/expired, assert the client surfaces an authentication error and stops, rather than retrying indefinitely."
+      ],
+      "premise": "Proactive pre-expiry refresh with single-flight coordination prevents expiry-driven 401s, and an unrecoverable refresh failure must surface as an error, not a retry loop.",
+      "ground_truth": "sound",
+      "rationale": "Every clause of the story is covered: pre-expiry refresh, no expiry-401, single-flight to protect the concurrent case, and the explicit failure-surfacing check that prevents the infinite-retry anti-behavior the story calls out. The checks constrain the implementation to exactly the described behavior."
+    },
+    {
+      "id": "c31",
+      "subsystem": "Circuit breaker for a downstream dependency",
+      "user_story": "As an SRE, I want a circuit breaker that, when a dependency is failing, fails fast for the bulk of traffic but still lets a small trickle of probe requests through while open, so we automatically detect recovery from the dependency's actual health instead of just waiting on a clock.",
+      "dod_checks": [
+        "When the failure threshold is exceeded, assert the breaker transitions to OPEN.",
+        "While OPEN, assert 100% of requests are short-circuited and rejected immediately with no call reaching the dependency.",
+        "Assert the breaker remains OPEN for the full configured cooldown window regardless of the dependency's current state.",
+        "Assert the breaker only transitions back toward CLOSED after the cooldown timer has elapsed."
+      ],
+      "premise": "While the circuit is open, every request must be rejected with zero calls to the dependency, and recovery is governed solely by a fixed cooldown timer.",
+      "ground_truth": "unsound",
+      "rationale": "The story wants a half-open probe trickle so recovery is detected from real dependency health. The checks demand '100% rejected, no call reaches the dependency' while open and 'stays open for the full cooldown regardless of state', which forbids the probing the story requires and makes recovery purely timer-driven. A strict open-until-timer breaker passes all checks yet never probes — violating the auto-detect-recovery intent. This is the textbook simple breaker, so the missing half-open behavior is easy to overlook."
+    },
+    {
+      "id": "c32",
+      "subsystem": "CORS preflight for credentialed requests",
+      "user_story": "As a frontend developer serving app.example.com, I need the API to accept authenticated cross-origin requests from my origin so the browser's preflight succeeds and credentials (cookies/Authorization) are sent — while origins I haven't allowed get no permissive CORS treatment.",
+      "dod_checks": [
+        "An OPTIONS preflight with Origin: https://app.example.com returns 204 and Access-Control-Allow-Origin echoing exactly that origin.",
+        "The response includes Access-Control-Allow-Credentials: true and Access-Control-Allow-Origin is a specific origin, not the wildcard *.",
+        "Access-Control-Allow-Methods and -Allow-Headers include the methods and headers the app uses, including Authorization and Content-Type.",
+        "A preflight from a non-allowlisted origin does not receive an Access-Control-Allow-Origin matching that origin nor Allow-Credentials: true."
+      ],
+      "premise": "Credentialed CORS requires echoing the specific allowed origin (never wildcard) with Allow-Credentials true, permitting the needed methods/headers, and denying non-allowlisted origins.",
+      "ground_truth": "sound",
+      "rationale": "The checks encode exactly the story: the credentialed path (specific origin + Allow-Credentials, explicitly not wildcard, which the browser spec requires for cookies), the app's actual methods/headers, and the negative case for disallowed origins. Each maps to a clause of the intent with no exploitable gap; the wildcard-forbidden check even guards against the common insecure shortcut."
+    },
+    {
+      "id": "c33",
+      "subsystem": "UI/UX — theming",
+      "user_story": "As a user I want a theme toggle in Settings so I can flip between light and dark. On first launch, before I've ever touched the toggle, the app should follow my operating system's appearance setting so it matches everything else on my machine.",
+      "dod_checks": [
+        "grep -q 'ThemeToggle' src/components/Settings.jsx",
+        "Playwright: fresh profile, no stored preference; on first paint assert document.documentElement.dataset.theme === 'dark'",
+        "Playwright: clicking the toggle flips data-theme between 'light' and 'dark'",
+        "Playwright: reload after toggling; chosen theme persists from localStorage",
+        "grep -q 'theme' docs/settings.md"
+      ],
+      "premise": "With no stored user preference, the correct default theme is a fixed 'dark', so the initial theme can be asserted as 'dark'.",
+      "ground_truth": "unsound",
+      "rationale": "Check 2 hard-codes the first-load default to 'dark'. The story explicitly says the untouched default must FOLLOW the OS (prefers-color-scheme), which could be light. An implementation that pins the default to dark passes every check — toggle exists, flips, persists, documented — yet violates the one intent that mattered (respect the system setting). The poison is subtle because dark-by-default is a near-universal assumption."
+    },
+    {
+      "id": "c34",
+      "subsystem": "CLI",
+      "user_story": "As an operator I want a --dry-run flag on the `sync` command that prints every file it would upload or delete, so I can preview a risky sync without touching the remote bucket.",
+      "dod_checks": [
+        "sync --dry-run exits 0",
+        "Remote object count before == after running sync --dry-run (no mutations)",
+        "sync --dry-run stdout lists each planned action, each line prefixed '[dry-run]' with upload/delete verb and path",
+        "grep -qi 'dry.run' docs/cli.md"
+      ],
+      "premise": "--dry-run means: show the full set of planned mutations and perform none of them, leaving the remote byte-for-byte unchanged.",
+      "ground_truth": "sound",
+      "rationale": "Every check maps directly onto a clause of the story: the flag exists and succeeds, no remote mutation occurs (the core safety promise), the planned actions are actually printed, and it is documented. Nothing is over-specified beyond the user's ask; nothing the user wanted is omitted. The checks faithfully encode the intent."
+    },
+    {
+      "id": "c35",
+      "subsystem": "config",
+      "user_story": "We're renaming the config key `cacheDir` to `cache.directory`. The critical constraint: existing user config files that still use `cacheDir` must keep working — read the old key as a fallback and emit a deprecation warning. Nobody's setup should break on upgrade.",
+      "dod_checks": [
+        "grep -q 'cache.directory' config/schema.json",
+        "Loading a config that sets only cache.directory succeeds and resolves the path",
+        "Schema validation rejects unknown top-level keys: a config containing 'cacheDir' exits 1 with a validation error",
+        "Running the provided migration script rewrites cacheDir -> cache.directory in-place",
+        "Test asserts a deprecation warning is logged when the legacy path is used"
+      ],
+      "premise": "After the rename, `cacheDir` is an invalid/unknown key, and a config still containing it should be rejected by strict schema validation (users are expected to migrate).",
+      "ground_truth": "unsound",
+      "rationale": "Check 3 requires strict rejection of any config still containing `cacheDir`, directly contradicting the story's central promise that old configs 'must keep working' as a read fallback. It is even mutually inconsistent with check 5, which asserts a deprecation warning when the legacy path is used — unreachable if check 3 rejects the key at load. A shallow judge fixates on the reasonable-looking migration script (check 4) and misses that force-migration is not backward compatibility. Checks pass, upgrading users break."
+    },
+    {
+      "id": "c36",
+      "subsystem": "UI/UX — interaction",
+      "user_story": "Pressing Escape should close the open dialog and return keyboard focus to the button that opened it. But if the user has a date-picker open inside the dialog, Escape should just close the date-picker and leave the dialog open.",
+      "dod_checks": [
+        "Playwright: open dialog, press Escape; dialog element is removed/hidden from the DOM",
+        "Playwright: after Escape-close, document.activeElement === the trigger button",
+        "Playwright: with nested date-picker open, press Escape; date-picker closes and the dialog remains visible",
+        "Playwright: with nested date-picker now closed, a second Escape closes the dialog"
+      ],
+      "premise": "Escape dismisses the topmost open layer only: it closes an inner date-picker first (dialog stays), and closes the dialog with focus restored when no inner layer is open.",
+      "ground_truth": "sound",
+      "rationale": "The checks encode both the happy path (close + focus restoration) and the explicit exception the user called out (nested picker takes precedence). Check 3 pins the exact carve-out, and check 4 confirms the layered behavior resolves correctly afterward. No check over-reaches beyond the story, and the tricky requirement is covered rather than glossed. Faithful."
+    },
+    {
+      "id": "c37",
+      "subsystem": "UI/UX — feed",
+      "user_story": "The photo feed feels clunky with its page buttons. I want it to load the next batch automatically as I scroll toward the bottom — an endless feed with no clicking to advance.",
+      "dod_checks": [
+        "Playwright: feed renders 20 items on initial load",
+        "Playwright: a 'Load more' control at the bottom advances the feed to the next 20 items",
+        "Playwright: repeatedly advancing eventually reaches the full dataset size (no items dropped)",
+        "URL query reflects the current batch, e.g. ?offset=40",
+        "grep -q 'fetchNextBatch' src/Feed.jsx"
+      ],
+      "premise": "Advancing the feed to the next batch is driven by an explicit 'Load more' control that the user activates.",
+      "ground_truth": "unsound",
+      "rationale": "Check 2 mandates a user-activated 'Load more' control as the advance mechanism. The story is explicit: batches load AUTOMATICALLY on scroll, 'no clicking to advance.' An implementation built entirely around a Load-more button satisfies all five checks (initial 20, advances, reaches full set, offset in URL, has a fetch function) while delivering exactly the click-to-advance experience the user rejected. Subtle because 'Load more' and infinite-scroll share nearly all their plumbing — only the trigger differs, and no check tests the scroll trigger."
+    },
+    {
+      "id": "c38",
+      "subsystem": "UI/UX — forms",
+      "user_story": "On the signup form, the email field should show an inline error the moment the user leaves the field with an invalid address, clear that error once it's corrected, and keep the Submit button disabled while any field is still invalid.",
+      "dod_checks": [
+        "Playwright: type 'foo@' into email, blur; an inline error 'Enter a valid email' appears next to the field",
+        "Playwright: correct to 'foo@bar.com', blur; the inline error is removed",
+        "Playwright: while email is invalid, the Submit button has the disabled attribute",
+        "Playwright: with all fields valid, the Submit button is enabled"
+      ],
+      "premise": "Validation fires on blur, error text toggles with validity, and Submit is gated on overall form validity.",
+      "ground_truth": "sound",
+      "rationale": "Each check corresponds one-to-one with a clause of the story: error on blur-while-invalid, error clears on correction, Submit disabled while invalid, Submit enabled when all valid. The 'on blur' timing (not on-keystroke) is captured, and gating is tied to overall validity as the user described. No hidden assumption diverges from intent."
+    },
+    {
+      "id": "c39",
+      "subsystem": "CLI",
+      "user_story": "Add a `--json` flag to `deploy status` so I can pipe it into jq in CI. The existing human-readable table output must stay exactly as it is for interactive use — I only want machine output when I ask for it with the flag.",
+      "dod_checks": [
+        "deploy status --json | jq -e '.status' exits 0 (valid JSON with a status field)",
+        "deploy status | jq -e '.status' exits 0 (output parses as JSON)",
+        "JSON output includes fields: status, region, updated_at",
+        "Exit code is nonzero when the deployment is reported unhealthy"
+      ],
+      "premise": "The command's output is JSON — both the flagged and the default invocation should emit parseable JSON.",
+      "ground_truth": "unsound",
+      "rationale": "Check 2 requires the DEFAULT invocation (no flag) to be valid JSON. The story is emphatic that the human-readable table 'must stay exactly as it is' and JSON should appear 'only when I ask for it with the flag.' An implementation that converts all output to JSON passes checks 1-4 cleanly yet destroys the interactive table the user insisted on preserving. The poison hides as a plausible 'consistency' assertion; a judge skimming for JSON correctness accepts it."
+    },
+    {
+      "id": "c40",
+      "subsystem": "dev-tooling",
+      "user_story": "Add a pre-commit hook that runs eslint on staged JS files and blocks the commit when there are lint errors. Warnings should not block. Devs need to be able to bypass it with --no-verify for the occasional emergency hotfix.",
+      "dod_checks": [
+        "test -x .husky/pre-commit",
+        "Committing a staged file containing an eslint error fails with a nonzero exit and the commit is not created",
+        "Committing a staged file with only eslint warnings succeeds and creates the commit",
+        "git commit --no-verify with an eslint error present still creates the commit (hook bypassed)"
+      ],
+      "premise": "Errors block the commit, warnings do not, and --no-verify bypasses the hook entirely.",
+      "ground_truth": "sound",
+      "rationale": "The checks encode exactly the three behavioral distinctions the story draws: errors block (check 2), warnings pass (check 3), and the explicit escape hatch works (check 4), plus the hook being installed and executable (check 1). The warning-vs-error boundary and the bypass — the two easy-to-get-wrong clauses — are both pinned. Nothing over-reaches; faithful encoding."
+    }
+  ]
+}

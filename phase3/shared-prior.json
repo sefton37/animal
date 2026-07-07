@@ -1,0 +1,56 @@
+[
+  {
+    "id": "sp-1",
+    "subsystem": "time / scheduling",
+    "user_story": "As a finance-ops user, I want the system to generate and email the revenue report at the end of each month so the team starts the next month with fresh numbers.",
+    "ambiguous_term": "end of each month",
+    "common_reading": "The last calendar day of the month — fire at 23:59 on the 30th/31st (28th/29th for Feb).",
+    "other_valid_reading": "The last business day of the month — finance close lands on the last weekday, skipping weekends and holidays, so a month ending Saturday closes on Friday the 29th/30th.",
+    "why_it_matters": "When month-end falls on a weekend, the calendar-day job emails a report on a non-working day (and possibly across a boundary the finance team already closed on Friday). Every model resolves 'end of month' to the last calendar date, so an adversarial panel never questions it — yet the user's actual close cadence is the business-day reading, and the report arrives on the wrong day every quarter."
+  },
+  {
+    "id": "sp-2",
+    "subsystem": "money / rounding",
+    "user_story": "As a billing engineer, I want to compute per-line tax and totals and round every monetary value to the nearest cent.",
+    "ambiguous_term": "round to the nearest cent",
+    "common_reading": "Round half up — a trailing 0.5 always rounds away from zero, the schoolbook rule that naive round() and every LLM reach for.",
+    "other_valid_reading": "Banker's rounding (round half to even) — the IEEE-754 default and the method many accounting standards and tax authorities mandate to remove directional bias.",
+    "why_it_matters": "Across millions of line items, half-up injects a consistent upward bias, so totals drift by cents-to-dollars against any downstream ledger that uses half-even and the reconciliation/audit fails. Because half-up is the universal instinct, no judge flags it — but some jurisdictions legally require half-even, so the 'obvious' reading is the non-compliant one."
+  },
+  {
+    "id": "sp-3",
+    "subsystem": "ordering / versioning",
+    "user_story": "As a release-dashboard user, I want the 'latest version' of each package pinned at the top of its row.",
+    "ambiguous_term": "latest version",
+    "common_reading": "The highest semantic version number, compared numerically (2.4.0 ranks above 2.3.9).",
+    "other_valid_reading": "The most recently published release by timestamp — a backported hotfix like 1.9.5 to an old major branch can ship after 2.4.0 is already out.",
+    "why_it_matters": "When a maintainer backports a security patch to an older major, the highest-semver reading hides the newest artifact that actually exists, and a user who pulls 'latest' gets different bits under each interpretation. Every model equates 'latest' with 'highest number,' so the panel agrees — but the user watching a dashboard for the freshest release may mean most-recently-published."
+  },
+  {
+    "id": "sp-4",
+    "subsystem": "units / bytes",
+    "user_story": "As a user on a metered plan, I want my storage usage shown in GB and enforced against my 100 GB quota.",
+    "ambiguous_term": "GB",
+    "common_reading": "Binary gigabyte: 1 GB = 1024^3 bytes (GiB), matching what most OS file managers display and what engineers instinctively code.",
+    "other_valid_reading": "Decimal/SI gigabyte: 1 GB = 1000^3 bytes, the definition disk manufacturers, cloud providers, and billing systems use.",
+    "why_it_matters": "The two definitions differ by ~7.4%, so a quota checked in one unit but displayed or billed in the other lets a user store 7% more or less than the number they see. Overage charges and 'you said 100 GB' disputes hinge entirely on which byte a GB is — and every model silently picks 1024^3, so a shared-prior panel never surfaces the SI reading the billing team likely intends."
+  },
+  {
+    "id": "sp-5",
+    "subsystem": "locale / calendar",
+    "user_story": "As an analytics user, I want a 'this week' dashboard tile that aggregates the current week's activity.",
+    "ambiguous_term": "week (first day of)",
+    "common_reading": "Week starts Sunday — the US and JavaScript Date default (getDay()===0), so 'this week' spans Sunday through Saturday.",
+    "other_valid_reading": "Week starts Monday — the ISO-8601 convention used by most of the world and by ISO week numbering, so 'this week' spans Monday through Sunday.",
+    "why_it_matters": "The boundary moves a full day, so Sunday's activity falls into different weeks under each reading and weekly totals plus week-over-week deltas disagree. LLMs (and US-based readers) default to Sunday-start without hesitation, so no judge challenges it — but a global or European user base means Monday-start, and the 'obvious' answer is wrong for them every single week."
+  },
+  {
+    "id": "sp-6",
+    "subsystem": "pagination",
+    "user_story": "As an API consumer, I want to page through the activity feed, 20 items per page, newest first.",
+    "ambiguous_term": "page through … 20 per page",
+    "common_reading": "Offset/limit pagination — page 2 means skip 20 and take the next 20.",
+    "other_valid_reading": "Cursor/keyset pagination anchored to the last item seen, which is what a continuously-growing feed needs to stay stable across requests.",
+    "why_it_matters": "On a feed where new items are inserted at the top between requests, offset pagination shifts everything down, so page 2 repeats rows already shown on page 1 and silently skips others. Every model reaches for offset/limit as the default meaning of 'page through,' so the panel agrees it's correct — but the word 'feed' implies live inserts, and the user almost certainly needs stable cursoring to avoid duplicates and gaps."
+  }
+]
