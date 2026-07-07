@@ -3,17 +3,16 @@
 > An experiment in local-first agentic harness design — built on the foundation
 > and legacy of the [Resonance](#the-resonance-lineage) engine.
 
-**Status:** Phases 0–3 complete. The kernel does harness-verified work on a live
-repo (P1); the work lane adds a gated `draft→…→done` state machine, human-gated,
-with Gate 0 rejecting vacuous DoD checks at authoring (P2); and the cross-family
-panel (P3) catches subtle bad premises at **95% recall / 0% false-positive**
-(majority vote of gpt-oss/mistral/qwen), with interpretation-enumeration surfacing
-shared-prior ambiguities 6/6, and the patch-farm lane (sample-k + test-filter +
-cross-family select) solving 6/6 vs 5/6 single-attempt — the diversity thesis (O4)
-validated in running code, on both the judgment and generation sides.
+**Status: Phases 0–4 complete — animal is functionally complete across the planned
+build.** It measures its own hardware (P0), runs an evidence-native kernel that
+makes non-persistence impossible (P1), gates work behind a human-approved
+`draft→…→done` state machine that rejects vacuous DoD checks at authoring (P2),
+uses decorrelated model families to both **judge** premises (95% recall / 0% FP)
+and **generate** fixes (patch farm 6/6 vs 5/6 single-attempt) (P3), and **learns
+from verified outcomes** — routing on measured track records and compiling earned
+lessons into regression guards (P4). 38 tests green.
 See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md), [`phase1/`](phase1/README.md),
-[`phase2/`](phase2/README.md), [`phase3/`](phase3/README.md). Next: Phase 4
-(calibration + learning plane), per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
+[`phase2/`](phase2/README.md), [`phase3/`](phase3/README.md), [`phase4/`](phase4/README.md).
 
 ```bash
 # backend (Phase 0) up, then:

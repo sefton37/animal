@@ -27,7 +27,8 @@ def _finish(L, task, traj, extra) -> dict:
 
 
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
-             ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False) -> dict:
+             ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False,
+             learn: bool = False) -> dict:
     L = Ledger(ledger_dir=ledger_dir)
     sb = Sandbox()
     task = Task(spec)
@@ -88,6 +89,23 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
     L.append(EventType.GATE, {"gate": "dod_verify", "all_pass": all_pass,
                               "results": [{"name": r["name"], "passed": r["passed"]} for r in results]})
     task.transition("done" if all_pass else "needs_human"); traj.append(task.state)
+
+    # Learning plane (opt-in): learn from the VERIFIED outcome of this run — record
+    # calibration from the ledger, and upsert each passed DoD check as a lesson
+    # (re-observation compiles it into a standing regression check).
+    if learn:
+        from .calibration import Calibration
+        from .lessons import Lessons
+        cal = Calibration(); n_cal = cal.ingest_ledger(L); cal.close()
+        les = Lessons()
+        paths = [g["ref"] for g in spec.groundings if g.get("exists")]
+        n_les = 0
+        for c, r in zip(spec.dod, results):
+            if r["passed"]:
+                les.upsert(f"{spec.id}:{c.name}", spec.user_story, paths=paths, check=c, verified_good=True)
+                n_les += 1
+        les.close()
+        L.append(EventType.GATE, {"gate": "learn", "calibration_records": n_cal, "lessons_upserted": n_les})
 
     summary = _finish(L, task, traj, {
         "approved": True, "dod_all_pass": all_pass,
