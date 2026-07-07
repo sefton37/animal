@@ -1,0 +1,41 @@
+# Local harness state — never committed (see ARCHITECTURE.md §State plane)
+/var/
+*.ledger
+*.ledger.zst
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Model artifacts / caches
+/models/
+*.gguf
+.cache/
+
+# Secrets & local config (sovereignty: nothing with a hostname/key is tracked)
+.env
+.env.*
+*.local.toml
+config.local.*
+secrets/
+
+# Language ecosystems (language not yet chosen — cover the likely three)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+build/
+target/
+Cargo.lock.orig
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
