@@ -87,6 +87,37 @@ misses.
 The backlog is a constructed 6-bug set; pointing the farm at a real scoped backlog
 (Cairn trim P2–P5) is the production use. Results in `results/patch-farm.{txt,json}`.
 
+## Production-scale trial on real repos (Cairn + Stalag) — the honest finding
+
+Pointing the farm at two real codebases produced a more useful result than a green
+checkmark: **the farm is a specialized tool, and neither project's actual backlog
+is its shape.**
+
+- **Cairn** (`~/dev/Cairn`, Python monorepo): its trim backlog (#259–276) is
+  *green-preserving refactors, migrations, and architecture decisions* — the
+  opposite of the farm's red→green contract (make a *failing* test pass). Its test
+  suite also resolves DB paths under `~/.talkingrock`; the paths are redirectable
+  (`HOME` + `TALKINGROCK_DATA_DIR`) so the live DB is protectable (verified
+  untouched), but farming it cleanly needs its `.venv`/editable-install worked
+  around on copies. Not run — wrong shape, disproportionate setup.
+- **Stalag** (`~/dev/stalag`, JS game): its backlog (#294–439) is creative/graphics/
+  simulation features whose correctness is *perceptual* (the `HUMAN_CHECK` class the
+  design says the farm can't judge), and its logic suite already passes.
+
+So the honest "farm on real code" run is mutation-testing on **real Stalag modules
+against their real tests**: seed a validated regression in `cells.js` / `to-cell.js`,
+make the farm recover it, verified by the real `cells.test.mjs` / `geometry.test.mjs`.
+
+**Result** (4 real-module regressions, k=5): farm solved **4/4**, **0 test-gamed**
+(the guard confirmed every fix edited the module, not the test). But single-attempt
+also solved 4/4 — these single-line regressions are easy enough that temp-0.2 gets
+them first try, so this run **did not exercise the sampling advantage**. That
+advantage is real but only shows on harder bugs (the constructed `ob-2` above,
+recovered only at raised temperature); a fair production demonstration of *sampling
+value* needs subtler, multi-step regressions. What this run *does* prove: the farm
+and its anti-gaming guard operate correctly on real, non-toy code and real test
+suites. Results in `results/stalag-farm.{txt,json}`.
+
 ## Deferred to Phase 4
 - Calibration + the learning plane (per-seat detection-value scoring feeds panel
   vote-weighting and routing); native Bastion-format ingestion.

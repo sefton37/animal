@@ -1,0 +1,75 @@
+{
+ "repo": "stalag",
+ "k": 5,
+ "solved": 4,
+ "first_attempt_solved": 4,
+ "tasks": [
+  {
+   "id": "cells-grass-flip",
+   "module": "src/cells.js",
+   "n_changed": 5,
+   "n_pass": 5,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt": true,
+   "solved": true,
+   "winner_temp": 0.2,
+   "test_gamed_attempts": 0
+  },
+  {
+   "id": "cells-nonorm-z",
+   "module": "src/cells.js",
+   "n_changed": 5,
+   "n_pass": 5,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt": true,
+   "solved": true,
+   "winner_temp": 0.2,
+   "test_gamed_attempts": 0
+  },
+  {
+   "id": "geom-coset",
+   "module": "src/to-cell.js",
+   "n_changed": 4,
+   "n_pass": 4,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9
+   ],
+   "first_attempt": true,
+   "solved": true,
+   "winner_temp": 0.2,
+   "test_gamed_attempts": 0
+  },
+  {
+   "id": "cells-nonorm-x",
+   "module": "src/cells.js",
+   "n_changed": 5,
+   "n_pass": 5,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt": true,
+   "solved": true,
+   "winner_temp": 0.2,
+   "test_gamed_attempts": 0
+  }
+ ]
+}
