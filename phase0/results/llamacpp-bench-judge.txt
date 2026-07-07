@@ -1,0 +1,6 @@
+== judge-gpt-oss-20b ==
+model: gpt-oss-20b-Q4_K_M.gguf  ngl=999 ctx=16384 flags=''
+load/swap: 5.1s   GPU: /home/kellogg/llm/llama.cpp/build/bin/llama-server, 11450 MiB
+prefill   prefill_t/s  gen_t/s      prompt_n   integrity
+2048      6610         192          2049       ok(no-trunc)
+8192      10381        183          8193       ok(no-trunc)

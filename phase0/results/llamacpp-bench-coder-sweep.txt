@@ -1,0 +1,5 @@
+== coder-cpumoe-24 ==
+load/swap: 5.1s   GPU: /home/kellogg/llm/llama.cpp/build/bin/llama-server, 10396 MiB
+2048      1639         23           2049       ok(no-trunc)
+== coder-cpumoe-12 ==
+== coder-cpumoe-0 ==

@@ -13,6 +13,9 @@
 *.gguf
 .cache/
 
+# Transient logs (curated results are committed as .txt/.md)
+*.log
+
 # Secrets & local config (sovereignty: nothing with a hostname/key is tracked)
 .env
 .env.*

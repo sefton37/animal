@@ -1,0 +1,6 @@
+== coder-moe-cpu48 ==
+model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf  ngl=999 ctx=16384 flags='--n-cpu-moe 48'
+load/swap: 5.1s   GPU: /home/kellogg/llm/llama.cpp/build/bin/llama-server, 2802 MiB
+prefill   prefill_t/s  gen_t/s      prompt_n   integrity
+2048      2017         37           2049       ok(no-trunc)
+8192      2861         36           8193       ok(no-trunc)

@@ -1,0 +1,3 @@
+STREAM triad: N=200000000/array (4.80 GB total), threads=24
+best triad time: 0.1022 s
+MEMORY BANDWIDTH: 47.0 GB/s

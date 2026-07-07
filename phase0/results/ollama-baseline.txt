@@ -1,0 +1,6 @@
+# Ollama baseline @ 2026-07-07T12:38:43Z  num_ctx=8192
+# (model, processor, load/swap latency, prefill tok/s, gen tok/s)
+qwen2.5-coder:14b              GPU  load=  6.27s  prefill=  496.5 tok/s (44 tok)  gen=  59.0 tok/s (89 tok)
+qwen3:14b                      GPU  load=  7.48s  prefill=  125.1 tok/s (25 tok)  gen=  58.6 tok/s (1138 tok)
+gpt-oss:20b                    GPU  load= 34.11s  prefill=  251.7 tok/s (82 tok)  gen=  23.7 tok/s (403 tok)
+qwen3:4b                       CPU  load= 10.05s  prefill=  161.5 tok/s (25 tok)  gen=  15.6 tok/s (2093 tok)

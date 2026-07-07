@@ -1,0 +1,56 @@
+# llama-swap roster config — the phase-major GPU scheduler (ARCHITECTURE §Fork 3).
+# One GPU model resident at a time (group "gpu", swap:true); CPU jury + embedder
+# run concurrently off-GPU (no VRAM, no eviction). This is the concrete
+# implementation of the VRAM arbiter's build/judge phase-major swapping.
+#
+# Run: ~/llm/swap/llama-swap --listen 127.0.0.1:8890 --config phase0/llama-swap.roster.yaml
+# Requests route by the "model" field; llama-swap loads/unloads to satisfy them.
+#
+# Measured tuning baked in: coder/architect --n-cpu-moe 48 (full expert offload =
+# sweet spot, 37 tok/s / 2.8 GB); q8_0 KV needs -fa on.
+healthCheckTimeout: 300
+logLevel: info
+
+macros:
+  # shared llama-server prefix; ${PORT} is assigned by llama-swap
+  srv: "/home/kellogg/llm/llama.cpp/build/bin/llama-server --host 127.0.0.1 --port ${PORT} -fa on --jinja --cache-reuse 256 --cache-type-k q8_0 --cache-type-v q8_0"
+  models: "/home/kellogg/dev/animal/var/models"
+
+models:
+  # --- GPU seats (phase-major: one at a time) ---
+  coder:                    # Qwen3-Coder-30B-A3B — MoE, experts on CPU
+    cmd: "${srv} -m ${models}/coder-qwen3-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf -ngl 999 --n-cpu-moe 48 -c 32768 --parallel 2"
+    ttl: 300
+    checkEndpoint: /health
+  architect:                # Qwen3-30B-A3B-Thinking — MoE, experts on CPU
+    cmd: "${srv} -m ${models}/architect-qwen3-30b-thinking/Qwen3-30B-A3B-Thinking-2507-Q4_K_M.gguf -ngl 999 --n-cpu-moe 48 -c 32768"
+    ttl: 300
+    checkEndpoint: /health
+  judge:                    # gpt-oss-20b — fits fully on GPU (~12 GB)  [path verify on download]
+    cmd: "${srv} -m ${models}/judge-gpt-oss-20b/gpt-oss-20b-Q4_K_M.gguf -ngl 999 -c 16384"
+    ttl: 300
+    checkEndpoint: /health
+  auditor:                  # Mistral-Small-3.2-24B — fits on GPU, cap ctx  [path verify on download]
+    cmd: "${srv} -m ${models}/auditor-mistral-24b/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf -ngl 999 -c 16384"
+    ttl: 300
+    checkEndpoint: /health
+
+  # --- CPU jury (no VRAM, run concurrently; -ngl 0)  [paths verify on download] ---
+  jury-qwen3-4b:
+    cmd: "${srv} -m ${models}/jury-qwen3-4b/Qwen3-4B-Instruct-2507-Q4_K_M.gguf -ngl 0 -c 8192"
+    ttl: 600
+  jury-gemma3-4b:
+    cmd: "${srv} -m ${models}/jury-gemma3-4b/gemma-3-4b-it-Q4_K_M.gguf -ngl 0 -c 8192"
+    ttl: 600
+  jury-llama32-3b:
+    cmd: "${srv} -m ${models}/jury-llama32-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf -ngl 0 -c 8192"
+    ttl: 600
+  embedder:                 # Qwen3-Embedding-0.6B  [path verify on download]
+    cmd: "${srv} -m ${models}/embedder-qwen3-0.6b/Qwen3-Embedding-0.6B-Q8_0.gguf -ngl 999 --embedding -c 8192"
+    ttl: 600
+
+groups:
+  gpu:                      # the phase-major constraint: one GPU seat loaded at a time
+    swap: true
+    exclusive: true
+    members: ["coder", "architect", "judge", "auditor"]

@@ -1,0 +1,5 @@
+== auditor-mistral-ngl30 ==
+model: Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf  ngl=30 ctx=8192 flags=''
+load/swap: 3.9s   GPU: /home/kellogg/llm/llama.cpp/build/bin/llama-server, 11166 MiB
+prefill   prefill_t/s  gen_t/s      prompt_n   integrity
+2048      1011         12           2050       ok(no-trunc)
