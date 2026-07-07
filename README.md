@@ -3,11 +3,13 @@
 > An experiment in local-first agentic harness design — built on the foundation
 > and legacy of the [Resonance](#the-resonance-lineage) engine.
 
-**Status:** Phase 0 (measure) ✅ and Phase 1 (kernel) ✅ complete — the kernel does
-real trivial-lane work on a live repo, standing alone, leaving a replayable
-ledger of harness-computed evidence. See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md)
-and [`phase1/README.md`](phase1/README.md). Later phases (spec state machine,
-panels, learning) land next, per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
+**Status:** Phase 0 (measure) ✅, Phase 1 (kernel) ✅, Phase 2 (work-lane state
+machine) ✅ complete. The kernel does harness-verified work on a live repo; the
+work lane adds a gated `draft→…→done` state machine where write capability follows
+state and only a human grant reaches the build step, with Gate 0 rejecting vacuous
+DoD checks at authoring. See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md),
+[`phase1/README.md`](phase1/README.md), [`phase2/README.md`](phase2/README.md).
+Next: Phase 3 (decorrelated-family panels), per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
 
 ```bash
 # backend (Phase 0) up, then:

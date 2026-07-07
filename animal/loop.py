@@ -52,8 +52,8 @@ def _feedback(env: Envelope) -> str:
 
 
 def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | None = None,
-             ledger_dir=None, max_turns: int | None = None) -> dict:
-    L = Ledger(ledger_dir=ledger_dir)
+             ledger_dir=None, max_turns: int | None = None, ledger: Ledger | None = None) -> dict:
+    L = ledger or Ledger(ledger_dir=ledger_dir)   # work lane shares one ledger across the chain
     ws = Workspace(repo, L.session_id)
     mp = ModelPlane()
     sb = Sandbox()

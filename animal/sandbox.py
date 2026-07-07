@@ -40,7 +40,10 @@ class Sandbox:
         code, captured output, and the sandbox mode actually used)."""
         ws = str(Path(workspace).resolve())
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": ws,
-               "LANG": "C.UTF-8", "TMPDIR": "/tmp"}
+               "LANG": "C.UTF-8", "TMPDIR": "/tmp",
+               # checks are ephemeral: never leave a bytecode cache that could
+               # poison a later run's result (reproducibility hygiene)
+               "PYTHONDONTWRITEBYTECODE": "1"}
         if self.mode in ("full", "fs_only"):
             net = ["--unshare-net"] if self.mode == "full" else []
             cmd = ["bwrap", *_BASE, "--bind", ws, ws, *net, "--chdir", ws, "--", *argv]
