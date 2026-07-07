@@ -1,0 +1,58 @@
+{
+ "tasks": [
+  {
+   "id": "ob-1",
+   "filename": "chunk_list.py",
+   "buggy_code": "def chunk_list(seq, size):\n    \"\"\"Split seq into consecutive sublists of length `size`.\n\n    The final chunk may be shorter than `size` if there are\n    leftover elements. `size` is assumed to be a positive integer.\n    \"\"\"\n    result = []\n    for i in range(0, len(seq) - size, size):\n        result.append(seq[i:i + size])\n    return result\n",
+   "task_description": "Implement chunk_list(seq, size): split a sequence into consecutive sublists, each of length `size`, in order. The final sublist may be shorter than `size` when the elements don't divide evenly. For example chunk_list([1,2,3,4,5], 2) should give [[1,2],[3,4],[5]]. An empty sequence yields an empty list, and `size` is always a positive integer.",
+   "test_filename": "test_chunk_list.py",
+   "test_code": "from chunk_list import chunk_list\n\ndef main():\n    assert chunk_list([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]\n    assert chunk_list([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]\n    assert chunk_list([1, 2, 3], 3) == [[1, 2, 3]]\n    assert chunk_list([1, 2, 3], 1) == [[1], [2], [3]]\n    assert chunk_list([], 2) == []\n    assert chunk_list([1], 5) == [[1]]\n    print(\"ok\")\n\nmain()\n",
+   "bug_summary": "The loop bound `range(0, len(seq) - size, size)` stops `size` elements too early, dropping the final (possibly full) chunk and mishandling short inputs. It should be `range(0, len(seq), size)`."
+  },
+  {
+   "id": "ob-2",
+   "filename": "last_n.py",
+   "buggy_code": "def last_n(seq, n):\n    \"\"\"Return the last `n` elements of `seq` as a list.\n\n    If `n` is 0, return an empty list. If `n` is greater than or\n    equal to the length of `seq`, return all elements. `n` is a\n    non-negative integer.\n    \"\"\"\n    return list(seq[-n:])\n",
+   "task_description": "Implement last_n(seq, n): return the last `n` elements of a sequence as a list, preserving order. If `n` is 0, return an empty list. If `n` is greater than or equal to the length of the sequence, return all of its elements. `n` is always a non-negative integer, and `seq` may be any sequence (list, string, etc.).",
+   "test_filename": "test_last_n.py",
+   "test_code": "from last_n import last_n\n\ndef main():\n    assert last_n([1, 2, 3, 4], 2) == [3, 4]\n    assert last_n([1, 2, 3, 4], 0) == []\n    assert last_n([1, 2, 3], 5) == [1, 2, 3]\n    assert last_n([1, 2, 3], 3) == [1, 2, 3]\n    assert last_n([], 0) == []\n    assert last_n(\"abcde\", 2) == ['d', 'e']\n    print(\"ok\")\n\nmain()\n",
+   "bug_summary": "For n=0, `seq[-0:]` is `seq[0:]`, which returns the entire sequence instead of an empty list. The n==0 boundary must be handled explicitly (e.g. return [] when n <= 0)."
+  },
+  {
+   "id": "op-1",
+   "filename": "password_length.py",
+   "buggy_code": "def is_valid_length(password):\n    \"\"\"Return True if password length is between 8 and 64, inclusive.\"\"\"\n    n = len(password)\n    return n > 8 and n <= 64\n",
+   "task_description": "Implement is_valid_length(password): return True when the password's length is between 8 and 64 characters inclusive, and False otherwise. Both boundary lengths (exactly 8 and exactly 64) count as valid.",
+   "test_filename": "test_password_length.py",
+   "test_code": "from password_length import is_valid_length\n\ndef main():\n    assert is_valid_length(\"a\" * 8) is True, \"minimum length 8 should be valid\"\n    assert is_valid_length(\"a\" * 64) is True, \"maximum length 64 should be valid\"\n    assert is_valid_length(\"a\" * 20) is True\n    assert is_valid_length(\"a\" * 7) is False\n    assert is_valid_length(\"a\" * 65) is False\n    print(\"ok\")\n\nif __name__ == \"__main__\":\n    main()\n",
+   "bug_summary": "The lower-bound check uses a strict '>' (n > 8) instead of '>=', so a password of exactly 8 characters is wrongly rejected. Fix: change 'n > 8' to 'n >= 8'."
+  },
+  {
+   "id": "op-2",
+   "filename": "interval_overlap.py",
+   "buggy_code": "def overlaps(a, b, c, d):\n    \"\"\"Return True if inclusive intervals [a, b] and [c, d] share any point.\"\"\"\n    return a <= d or c <= b\n",
+   "task_description": "Implement overlaps(a, b, c, d): given two inclusive integer intervals [a, b] and [c, d] (with a <= b and c <= d), return True if the two intervals share at least one point (including when they merely touch at an endpoint), and False when they are completely disjoint.",
+   "test_filename": "test_interval_overlap.py",
+   "test_code": "from interval_overlap import overlaps\n\ndef main():\n    assert overlaps(0, 5, 3, 8) is True\n    assert overlaps(0, 5, 5, 10) is True, \"touching endpoints overlap\"\n    assert overlaps(0, 1, 5, 6) is False, \"disjoint intervals do not overlap\"\n    assert overlaps(5, 6, 0, 1) is False, \"disjoint (reversed order)\"\n    assert overlaps(2, 3, 0, 10) is True, \"fully contained\"\n    print(\"ok\")\n\nif __name__ == \"__main__\":\n    main()\n",
+   "bug_summary": "The overlap condition joins the two comparisons with 'or' instead of 'and', so disjoint intervals (where only one comparison holds) are wrongly reported as overlapping. Fix: change 'a <= d or c <= b' to 'a <= d and c <= b'."
+  },
+  {
+   "id": "st-1",
+   "filename": "collect_tags.py",
+   "buggy_code": "def collect_tags(tag, tags=[]):\n    \"\"\"Add `tag` to the given list of tags and return the list.\n\n    If no list is provided, start a fresh empty list for this call.\n    \"\"\"\n    tags.append(tag)\n    return tags\n",
+   "task_description": "Implement `collect_tags(tag, tags=None)` (or with a suitable default): append `tag` to the supplied list of tags and return that list. When the caller supplies a list, the tag is appended to it and that same list is returned. When the caller supplies no list, the function starts a brand-new empty list for that call \u2014 so two separate calls that each omit the list must NOT share or accumulate each other's tags.",
+   "test_filename": "test_collect_tags.py",
+   "test_code": "from collect_tags import collect_tags\n\n\ndef test_fresh_list_each_call():\n    assert collect_tags(\"a\") == [\"a\"]\n    # A second independent call must NOT carry over \"a\".\n    assert collect_tags(\"b\") == [\"b\"]\n\n\ndef test_provided_list_is_used():\n    base = [\"x\"]\n    result = collect_tags(\"y\", base)\n    assert result == [\"x\", \"y\"]\n    assert base == [\"x\", \"y\"]\n\n\ndef test_many_independent_calls():\n    for _ in range(3):\n        assert collect_tags(\"z\") == [\"z\"]\n\n\nif __name__ == \"__main__\":\n    test_fresh_list_each_call()\n    test_provided_list_is_used()\n    test_many_independent_calls()\n    print(\"ok\")\n",
+   "bug_summary": "Classic mutable default argument: `tags=[]` is evaluated once at definition time, so the same list object is reused across calls that omit the argument, causing tags to accumulate. Fix: default to None and create a fresh list inside the function."
+  },
+  {
+   "id": "st-2",
+   "filename": "running_stats.py",
+   "buggy_code": "class RunningStats:\n    \"\"\"Accumulates numbers and reports their running sum and average.\n\n    Each RunningStats instance is independent: numbers added to one\n    instance must not affect the totals of any other instance.\n    \"\"\"\n\n    samples = []\n\n    def add(self, value):\n        self.samples.append(value)\n\n    def total(self):\n        return sum(self.samples)\n\n    def average(self):\n        return sum(self.samples) / len(self.samples)\n",
+   "task_description": "Implement a `RunningStats` class that accumulates numbers. `add(value)` records a number; `total()` returns the sum of all recorded numbers; `average()` returns their arithmetic mean. Each `RunningStats` instance must be independent \u2014 numbers added to one instance must not appear in the totals or averages of any other instance.",
+   "test_filename": "test_running_stats.py",
+   "test_code": "from running_stats import RunningStats\n\n\ndef test_single_instance():\n    s = RunningStats()\n    s.add(2)\n    s.add(4)\n    assert s.total() == 6\n    assert s.average() == 3.0\n\n\ndef test_instances_are_independent():\n    a = RunningStats()\n    b = RunningStats()\n    a.add(10)\n    a.add(20)\n    b.add(1)\n    assert a.total() == 30\n    assert b.total() == 1\n    assert b.average() == 1.0\n\n\nif __name__ == \"__main__\":\n    test_single_instance()\n    test_instances_are_independent()\n    print(\"ok\")\n",
+   "bug_summary": "`samples` is a class attribute, so all instances share one list and appends accumulate across every instance. Fix: initialize `self.samples = []` in an `__init__` so each instance owns its own list."
+  }
+ ]
+}

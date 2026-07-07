@@ -52,7 +52,8 @@ def _feedback(env: Envelope) -> str:
 
 
 def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | None = None,
-             ledger_dir=None, max_turns: int | None = None, ledger: Ledger | None = None) -> dict:
+             ledger_dir=None, max_turns: int | None = None, ledger: Ledger | None = None,
+             temperature: float | None = None) -> dict:
     L = ledger or Ledger(ledger_dir=ledger_dir)   # work lane shares one ledger across the chain
     ws = Workspace(repo, L.session_id)
     mp = ModelPlane()
@@ -69,7 +70,7 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     edits_landed, finished = 0, False
     for turn_no in range(max_turns):
         try:
-            turn, meta = mp.call(role, messages)
+            turn, meta = mp.call(role, messages, temperature=temperature)
         except ModelError as e:
             L.append(EventType.ERROR, {"where": "model_call", "error": str(e)})
             break

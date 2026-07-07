@@ -53,6 +53,15 @@ def test_measure_recall_fp_and_excludes_degenerate(monkeypatch=None):
     assert m["seats"]["qwen"]["accuracy"] == 75 and m["rules"]["majority"]["recall_pct"] == 100
 
 
+def test_candidate_select_edges():
+    import animal.candidates as candidates
+    w, why = candidates.select([], "task")            # no survivor -> None (no model call)
+    assert w is None
+    c = {"i": 0, "temp": 0.2, "diff": "d"}
+    w, why = candidates.select([c], "task")           # one survivor -> that one (no model call)
+    assert w is c and "one candidate" in why
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

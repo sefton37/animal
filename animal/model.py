@@ -56,13 +56,15 @@ class ModelPlane:
     def __init__(self, url: str | None = None):
         self.url = url or config.LLAMA_SWAP_URL
 
-    def call(self, role: str, messages: list[dict]) -> tuple[dict, dict]:
+    def call(self, role: str, messages: list[dict], temperature: float | None = None) -> tuple[dict, dict]:
         """Return (turn_obj, meta). turn_obj is {"thought","action"}; meta carries
-        context-integrity signals. Raises ModelError on transport/parse failure."""
+        context-integrity signals. temperature overrides the role default (used by
+        candidate sampling for generation diversity). Raises ModelError on failure."""
         rc = config.ROLES[role]
         body = {
             "model": rc["model"], "messages": messages,
-            "temperature": rc["temperature"], "max_tokens": rc["max_tokens"],
+            "temperature": rc["temperature"] if temperature is None else temperature,
+            "max_tokens": rc["max_tokens"],
             "response_format": {"type": "json_schema",
                                 "json_schema": {"name": "turn", "strict": True, "schema": TURN_SCHEMA}},
         }
