@@ -1,0 +1,228 @@
+{
+  "cases": [
+    {
+      "id": "c01",
+      "subsystem": "collision detection",
+      "user_story": "Sniper rounds sometimes pass straight through thin metal railings when fired at close range. Fast projectiles need to reliably register hits on thin geometry.",
+      "dod_checks": [
+        "Fire projectiles at speeds up to 900 m/s at a 3 cm-thick static collider; assert a hit registers in all 1000 trials (zero tunneling).",
+        "Assert the reported hit position lies on the collider surface, not past it (swept/continuous detection in use).",
+        "Assert nearest-along-path resolution: when multiple colliders lie on the swept segment, the closest is the one reported.",
+        "Assert no regression: slow-projectile hit rate and frame time stay within 5% of the previous build."
+      ],
+      "premise": "Reliable thin-wall hit registration means swept collision over the projectile's per-frame path with nearest-hit resolution, verified against high-speed tunneling.",
+      "ground_truth": "sound",
+      "rationale": "The checks directly encode the story's intent: they reproduce the exact failure (high-speed tunneling through thin colliders), require the mechanism that fixes it (swept/continuous detection with surface-accurate, nearest-hit resolution), and guard against regressing normal shots or frame time. An implementation passing them has genuinely solved the user's stated problem with no assumption the user didn't ask for."
+    },
+    {
+      "id": "c02",
+      "subsystem": "fluid / buoyancy physics",
+      "user_story": "Wooden crates dropped in the sea should bob realistically on the waves. Testers said the current crates look like they're glued flat on top of the water instead of riding in it.",
+      "dod_checks": [
+        "Drop 50 crates; assert each crate origin's y >= the water surface height at its xz for every frame (crate never dips below the surface).",
+        "Assert crate vertical oscillation amplitude decays below 5 cm within 8 s (settles).",
+        "Assert each crate tracks wave xz displacement to within 10 cm.",
+        "Assert no crate sinks: final y stays within 2 cm of the local surface height."
+      ],
+      "premise": "A correctly floating crate never has any part go below the water surface.",
+      "ground_truth": "unsound",
+      "rationale": "Realistic buoyancy means the crate settles into wave troughs and its waterline oscillates both above and below the mean surface — that partial submersion is precisely the realism the story wants and the 'glued on top' look it rejects. The 'y >= surface at all times' check mandates the crate ride on or above the surface, i.e. the glued-on-top behavior, so an implementation can satisfy all four checks while violating the story's core intent."
+    },
+    {
+      "id": "c03",
+      "subsystem": "simulation determinism",
+      "user_story": "We want match replays to play back exactly as they happened from just the input log plus the match seed. Right now replays drift and desync a few seconds in.",
+      "dod_checks": [
+        "Assert running the sim twice from the same seed + input log yields bit-identical state hashes at every fixed tick.",
+        "Assert physics runs on a fixed timestep decoupled from render rate: final-state hash is identical at 30, 60, and 144 FPS.",
+        "Assert a 10-minute logged match replays to an identical final-state hash on the same build.",
+        "Assert a static scan finds no wall-clock time or unseeded RNG inside the sim step."
+      ],
+      "premise": "Deterministic replay requires fixed-timestep simulation driven only by seed+input, producing bit-exact state hashes reproducible across runs and frame rates and free of nondeterministic inputs.",
+      "ground_truth": "sound",
+      "rationale": "Determinism is exactly bit-exact reproducibility from seed+inputs independent of frame rate. The checks test that end to end (per-tick hash equality, FPS independence, full-match reproduction) and eliminate the standard desync sources (wall-clock, unseeded RNG). They faithfully encode the story with no hidden requirement the user didn't want; passing them means the drift/desync the user described is actually fixed."
+    },
+    {
+      "id": "c04",
+      "subsystem": "foliage rendering / LOD",
+      "user_story": "Fix the grass popping in. As I walk forward, whole patches suddenly appear a few steps ahead and it's distracting. I want grass to come in smoothly.",
+      "dod_checks": [
+        "Assert grass instances render out to a 45 m radius around the camera.",
+        "Assert instance density is reduced by 60% in the 25 m-45 m band (distance LOD tier active).",
+        "Assert zero grass instances are submitted beyond the 45 m radius (cull correctness).",
+        "Assert total grass draw time stays under 1.5 ms at maximum on-screen density."
+      ],
+      "premise": "Popping is solved by pushing the draw distance out and thinning far-field density, with a clean hard cull at the max radius.",
+      "ground_truth": "unsound",
+      "rationale": "Popping is caused by a hard visibility boundary; the story asks for grass that 'comes in smoothly' (fade / dither / scale-in near the boundary). The checks push the boundary to 45 m and explicitly REQUIRE a hard cull ('zero instances beyond 45 m') with no fade transition. An implementation meeting every check still snaps grass into existence at the new radius — it relocates the pop rather than removing it, exactly contradicting the intent."
+    },
+    {
+      "id": "c05",
+      "subsystem": "api/key-rotation",
+      "user_story": "Let customers rotate their API key with zero downtime: when they generate a new key, their OLD key must keep working for 24 hours so they can roll it out across their systems, and only then stop working. The new key must work right away.",
+      "dod_checks": [
+        "POST /keys/rotate returns a fresh key and stamps rotated_at=now() on the previous key",
+        "A request authenticated with the old key succeeds while (now - rotated_at) < 24h",
+        "A request with the old key returns 401 once (now - rotated_at) >= 24h",
+        "A request with the newly issued key is accepted immediately after rotation"
+      ],
+      "premise": "Zero-downtime rotation means the old key stays valid for a fixed 24h grace window after rotation and the new key is active immediately.",
+      "ground_truth": "sound",
+      "rationale": "Each check maps directly onto a clause of the story: old key valid for 24h (checks 2-3), new key immediately valid (check 4), rotation recorded (check 1). No check forces behavior the story rejects and no clause of the story is left unguarded. An implementation passing all four genuinely delivers what the user asked for."
+    },
+    {
+      "id": "c06",
+      "subsystem": "auth/login-hardening",
+      "user_story": "Protect the login endpoint from password-guessing, but do NOT lock people out of their own accounts — someone who fat-fingers their password a few times must still be able to get straight back in the moment they type it correctly. Slow attackers down; never block the legitimate owner.",
+      "dod_checks": [
+        "After 5 consecutive failed logins for a given account, the 6th attempt returns HTTP 423 Locked",
+        "A locked account is rejected even when the CORRECT password is supplied, until 15 minutes have elapsed",
+        "Integration test asserts the lockout flag and lockout_expires_at are persisted on the user row",
+        "A successful login before the threshold resets the failure counter to zero"
+      ],
+      "premise": "Brute-force protection is correctly implemented as per-account lockout: after N failed attempts the account is disabled for a cooldown window, regardless of subsequent correct credentials.",
+      "ground_truth": "unsound",
+      "rationale": "The story explicitly rejects locking the owner out ('never block the legitimate owner', 'get straight back in the moment they type it correctly'), yet every check REQUIRES exactly that — check 2 mandates rejecting the correct password. An implementation that hard-locks accounts passes all four checks while violating the stated intent and creating the very DoS the user feared (an attacker can lock any victim out by guessing). The wanted mechanism (throttling/delay/captcha) is never tested; account lockout is the water-wall the user said no to."
+    },
+    {
+      "id": "c07",
+      "subsystem": "auth/session-management",
+      "user_story": "When a user changes their password (say after a suspected compromise), log out all their OTHER active sessions immediately — but keep the session they used to make the change signed in, so they aren't kicked out of the app they're currently using.",
+      "dod_checks": [
+        "After a password change, every session other than the initiating one is invalidated (its token subsequently returns 401)",
+        "The session that issued the password-change request remains valid and can continue making authenticated calls",
+        "End-to-end test with three concurrent sessions: the two non-initiating sessions are dead and the initiating one is alive after the change",
+        "Invalidation occurs synchronously within the password-change request, not via a delayed background job"
+      ],
+      "premise": "Correct behavior is to revoke all sessions except the one that performed the change, synchronously, on password change.",
+      "ground_truth": "sound",
+      "rationale": "Every clause of the story is encoded and nothing beyond it is forced: other sessions die (checks 1,3), the current session survives (checks 2,3), and immediacy is asserted (check 4, matching 'immediately'). The three-session test even guards the exact keep-one-kill-the-rest boundary. A passing implementation delivers precisely the described intent."
+    },
+    {
+      "id": "c08",
+      "subsystem": "api/cors",
+      "user_story": "Our single-page app served from https://app.example.com needs to call the API with cookies (credentialed requests). Set up CORS so the browser permits calls from our app — and only our app; other websites must not be able to make credentialed calls to the API.",
+      "dod_checks": [
+        "Preflight OPTIONS returns 204 with an Access-Control-Allow-Origin header",
+        "Response includes Access-Control-Allow-Credentials: true",
+        "A GET with Origin: https://app.example.com receives an Access-Control-Allow-Origin matching that origin",
+        "curl preflight from https://app.example.com passes and the subsequent GET succeeds"
+      ],
+      "premise": "CORS is correctly configured once preflight succeeds, credentials are allowed, and requests from app.example.com are permitted.",
+      "ground_truth": "unsound",
+      "rationale": "The story has two halves — allow app.example.com AND deny every other origin for credentialed calls — but every check only exercises the allow half. Because Allow-Credentials:true forbids a literal wildcard, the natural passing implementation reflects the incoming Origin header back verbatim; that reflects app.example.com (all checks green) yet ALSO reflects evil.com, exposing the credentialed API to any site — the exact opposite of what was asked. No check asserts a foreign origin is rejected, so a fully insecure config passes."
+    },
+    {
+      "id": "c09",
+      "subsystem": "Scheduling / weekly email delivery",
+      "user_story": "Send the weekly digest every Monday at 08:00 in each recipient's own timezone — a subscriber in Tokyo and one in New York should both get it at their local 8am, not at one shared server-clock instant.",
+      "dod_checks": [
+        "For a recipient with tz America/New_York, assert the send fires at the instant equal to Monday 08:00 America/New_York (correct UTC offset applied).",
+        "For a recipient with tz Asia/Tokyo, assert the send fires at Monday 08:00 Asia/Tokyo.",
+        "During a US DST transition week, assert the NY recipient still receives at 08:00 local wall-clock (UTC offset shifts one hour vs the prior week).",
+        "Assert each recipient record carries an IANA timezone and the scheduler reads it per recipient at dispatch time."
+      ],
+      "premise": "Delivery time is computed per recipient at 08:00 their local IANA time, DST-aware, rather than a single server-time fan-out.",
+      "ground_truth": "sound",
+      "rationale": "Each check maps directly onto an explicit clause of the story: per-recipient local 8am, the concrete Tokyo/NY example, and the DST-correctness implied by 'local wall-clock'. Satisfying all four is only possible with genuine per-recipient local-time scheduling; there is no single server-time send that passes them."
+    },
+    {
+      "id": "c10",
+      "subsystem": "ETL / feature-engineering pipeline",
+      "user_story": "Our feature-engineering pipeline runs ~40 min over 200 partitions and sometimes crashes halfway. When I restart it after a crash, I don't want it reprocessing partitions it already finished — recomputing everything is expensive and blows our SLA. Pick up from where it left off.",
+      "dod_checks": [
+        "Kill the job after 100/200 partitions, restart it, and assert the final output table checksum equals a clean single-run output (identical result).",
+        "Run the job twice back-to-back on identical input; assert the second run's output is byte-identical to the first (idempotent).",
+        "After a mid-run kill and restart, assert all 200 partitions are present in the output table.",
+        "Assert the job exits 0 on the restart following a crash."
+      ],
+      "premise": "Correctness after a crash-restart is fully captured by producing a complete, identical (idempotent) output; nothing needs to verify that already-finished partitions are skipped.",
+      "ground_truth": "unsound",
+      "rationale": "The load-bearing requirement is skipping already-done work to save time/SLA, which the user explicitly calls expensive. An implementation that simply reprocesses all 200 partitions from scratch on restart is complete, identical, and exits 0 — passing every check — yet does exactly the full recompute the user rejected. No check measures work-skipped, checkpoint reuse, or restart runtime."
+    },
+    {
+      "id": "c11",
+      "subsystem": "ML training / model promotion",
+      "user_story": "Retrain the churn model nightly. Only promote a new model to production if it beats the current prod model on our frozen holdout AUC. I never want to ship a regression.",
+      "dod_checks": [
+        "Assert the candidate's AUC is computed on the fixed, hash-pinned frozen holdout set (same rows every night).",
+        "When candidate AUC > incumbent AUC, assert the prod pointer moves to the candidate.",
+        "When candidate AUC <= incumbent AUC, assert the prod pointer is left unchanged.",
+        "Assert every nightly run logs both AUCs and the promote/skip decision."
+      ],
+      "premise": "Promotion is gated strictly on the candidate's holdout AUC exceeding the incumbent's on the same frozen set, and any non-improvement leaves production untouched.",
+      "ground_truth": "sound",
+      "rationale": "The checks encode exactly the guarantee in the story: a frozen, comparable evaluation basis, promote-on-strict-improvement, hold-on-tie-or-worse (so no regression can ship), plus an audit trail. There is no configuration that passes all four while promoting a model that is worse than incumbent."
+    },
+    {
+      "id": "c12",
+      "subsystem": "UI/UX",
+      "user_story": "As a user I want a 'Mark all as read' action in my notification center so the unread count drops to zero without me opening each item — I still want to be able to scroll back through the (now-read) notifications afterward.",
+      "dod_checks": [
+        "After clicking 'Mark all as read', the unread badge shows 0",
+        "GET /api/notifications?filter=unread returns [] after the action",
+        "After the action the notification panel shows its empty-state graphic with no items listed",
+        "The action completes and re-renders in under 300ms"
+      ],
+      "premise": "Marking all notifications as read means the notification panel should end up empty (no items displayed).",
+      "ground_truth": "unsound",
+      "rationale": "The story explicitly wants the read notifications to remain browsable; 'read' is a state change, not a deletion. The third check (panel shows empty-state, no items) requires read items to disappear from the panel, so an implementation that hides/clears everything passes every check yet destroys exactly the history the user said they want to keep. Badge=0 and unread-filter=[] are legitimately correct; the empty-panel check smuggles in delete-semantics."
+    },
+    {
+      "id": "c13",
+      "subsystem": "config/settings",
+      "user_story": "I want the desktop app to remember the window size and position between launches, so it reopens exactly where and how big I left it. On a fresh install with no saved state, opening at a sensible default is fine.",
+      "dod_checks": [
+        "On window close, the current width, height, x, and y are written to the config file",
+        "On launch, if saved geometry exists the window is restored to those exact values",
+        "On first run with no saved geometry, the window opens at the documented default size and centered",
+        "Resizing the window, quitting, and relaunching reopens it at the new size and position"
+      ],
+      "premise": "Persisting window geometry on close and restoring it on next launch (with a default fallback on first run) fully satisfies 'remember window size and position between launches'.",
+      "ground_truth": "sound",
+      "rationale": "Each check maps directly onto a clause of the story: save-on-close and restore-on-launch cover the 'remember' requirement, the first-run check covers the explicitly-blessed default case, and the round-trip check verifies the end-to-end behavior the user described. No check demands anything the story doesn't want, and passing them all implies the desired behavior."
+    },
+    {
+      "id": "c14",
+      "subsystem": "config/settings",
+      "user_story": "Add a dark-mode option to settings. Until I've made a choice, the app should follow my operating system's light/dark setting; once I explicitly pick a mode, remember my choice and stop following the OS.",
+      "dod_checks": [
+        "The settings screen has a dark-mode toggle whose state persists to localStorage across reloads",
+        "When the toggle is on, the document root carries data-theme=\"dark\"; when off, data-theme=\"light\"",
+        "The stored preference defaults to light (off) when nothing has been saved yet",
+        "Reloading the page preserves whatever the toggle was last set to"
+      ],
+      "premise": "A persisted two-state (on/off) light/dark toggle, defaulting to light, implements the theme preference.",
+      "ground_truth": "unsound",
+      "rationale": "The story requires three effective states — follow-OS (the initial, un-chosen state), explicit-light, and explicit-dark. A boolean toggle can only represent two, and the 'default to light' check actively contradicts the 'follow the OS until I choose' requirement: on first run a machine set to dark would still get light. There is no representation for 'no explicit choice yet,' so the OS-following behavior is impossible even though every check passes. The checks encode a simpler two-state model than the story specifies."
+    },
+    {
+      "id": "c15",
+      "subsystem": "dev-tooling",
+      "user_story": "Add a pre-commit hook that blocks a commit when someone leaves a stray console.log in production source, but doesn't get in the way of console.log inside test files.",
+      "dod_checks": [
+        "The hook exits non-zero when a staged file under src/ contains a console.log call",
+        "The hook exits zero when the only console.log added is inside a *.test.ts / *.test.js file",
+        "The hook exits zero when no staged file contains console.log",
+        "The hook scans only staged content, not unstaged working-tree changes"
+      ],
+      "premise": "A pre-commit hook that fails on console.log in staged src/ files while exempting *.test.* files implements the requested guard.",
+      "ground_truth": "sound",
+      "rationale": "Every check corresponds to a stated requirement: block in production source (check 1), allow in tests (check 2), don't fire spuriously (check 3), and operate on what's actually being committed rather than the working tree (check 4, the correct semantics for a pre-commit hook). Passing all four yields exactly the behavior the user asked for, with no extra constraint the story rejects."
+    },
+    {
+      "id": "c16",
+      "subsystem": "networking/protocols",
+      "user_story": "Our API client should transparently retry when a request fails due to a transient problem — a dropped connection or the server returning a temporary 5xx — so a momentary network blip doesn't bubble up as an error to the caller.",
+      "dod_checks": [
+        "A request that receives a 503 is retried and succeeds on a later attempt",
+        "A request that receives a 500 is retried up to the configured maximum",
+        "Any request whose response status is not 200 triggers a retry",
+        "Retries use exponential backoff and stop after at most 3 attempts"
+      ],
+      "premise": "Retrying on every non-200 response correctly implements 'retry transient failures'.",
+      "ground_truth": "unsound",
+      "rationale": "The story scopes retries to transient conditions (connection drops, 5xx). The third check widens that to 'any non-200', which sweeps in 4xx client errors (400/401/404/422) that are deterministic and will never succeed on retry, and — critically — would retry non-idempotent writes (POST) on ambiguous responses, risking duplicated side effects. An implementation that blindly retries all non-200s passes every check while hammering the server on permanent errors and violating the 'transient' intent."
+    }
+  ]
+}

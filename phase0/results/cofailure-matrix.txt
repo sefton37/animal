@@ -1,0 +1,18 @@
+>> gpt-oss (ngl=999 mt=1024 )
+>> mistral (ngl=30 mt=200 )
+>> qwen-coder (ngl=999 mt=256 --n-cpu-moe 48)
+
+=== decorrelation matrix (capable seats) ===
+cases: 16  (8 unsound / 8 sound)
+
+per-model:
+  gpt-oss      acc= 94%  missed-bad=0/8  abstain=1  (said sound=7/unsound=8)
+  mistral      acc= 94%  missed-bad=1/8  abstain=0  (said sound=9/unsound=7)
+  qwen-coder   acc= 88%  missed-bad=2/8  abstain=0  (said sound=10/unsound=6)
+
+pairwise co-failure phi (error-vector correlation; <0.5 = decorrelated):
+  gpt-oss      x mistral       phi=-0.07  both-wrong=0
+  gpt-oss      x qwen-coder    phi=-0.10  both-wrong=0
+  mistral      x qwen-coder    phi=-0.10  both-wrong=0
+
+max phi = -0.07  ->  GATE PASS  [all seats non-degenerate]

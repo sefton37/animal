@@ -17,19 +17,21 @@ in the plan were wishful.
 | 3 | Install `llama-server` (CUDA) + `llama-swap` — the target backend | ✅ **built + validated** (CUDA sm89, tag 33ca0dc); llama-swap v235 phase-major swap **proven** (coder↔architect, one GPU seat at a time) | `results/backend-install.md`, `results/model-roster.md`, `llama-swap.roster.yaml` |
 | 4 | Re-measure swap / batch-prefill(8k,32k) / tok-s / prefix-cache on llama.cpp | ✅ **4 GPU seats characterized** — coder/architect 37 t/s @2.8GB, judge(gpt-oss) **190 t/s** @11.4GB, auditor(Mistral-24B) 12 t/s @11.2GB (partial offload). Prefill 2k–10k t/s. **KEY: usable VRAM ~13.5GB (desktop eats 2.9GB) → dense-24B needs offload/headless.** jury+embedder pending. | `results/seat-characterization.md` |
 | 5 | Multi-turn agentic soak per hybrid model (prompt-cache correctness, no CUDA faults) | ⛔ blocked on #3 | `results/hybrid-soak.md` |
-| 6 | Grammar-constrained vs plain-text A/B (edit + tool-call fidelity) | ⛔ blocked on #3 | `results/grammar-ab.md` |
-| 7 | Co-failure matrix across roster seats (decorrelation, measured) | ⛔ blocked on #3 + models | `results/cofailure-matrix.md` |
+| 6 | Grammar-constrained vs plain-text A/B (edit + tool-call fidelity) | ✅ qwen3-4b **12/12 valid free-form** on flat AND nested schemas → constrained decoding validity-neutral (never worse, guarantees conformance) = **cheap insurance, not load-bearing**. Design refined: don't rely on grammar for small-model reliability (they're already reliable); keep plain-text for edit bodies. | `results/grammar-ab.txt` |
+| 7 | Co-failure matrix across roster seats (decorrelation, measured) | ✅ **GATE PASS**: 3 capable distinct-lineage judges (gpt-oss 94% / mistral 94% / qwen-coder 88%), **all pairwise φ<0, zero co-failures** (max φ=−0.07 ≪ 0.5). Diversity thesis holds. Small 3–4B models excluded (degenerate on premise review). | `results/cofailure-matrix.txt`, `cofailure-battery.json` |
 | 8 | Jury-on-CPU latency (3–4B, `num_gpu=0`) | ◐ Ollama 4B ≈ 15.6 tok/s CPU (~10s/verdict — usable) | `results/ollama-baseline.txt` |
-| 9 | Time one full-chain dry run | ⛔ blocked on kernel bits | `results/fullchain-dryrun.md` |
-| 10 | **Pre-register** panel thresholds (recall/FP) + interactive-latency ceiling | ⏳ proposed, awaiting ratification | `PREREGISTRATION.md` |
+| 9 | Time one full-chain dry run | ⏭ **deferred to Phase 0→1 boundary** (genuinely needs kernel pieces) | — |
+| 10 | **Pre-register** panel thresholds (recall/FP) + interactive-latency ceiling | ✅ **ratified + frozen** 2026-07-07 | `PREREGISTRATION.md` |
 
 Legend: ▶ running · ◐ partial · ⏳ in progress · ⛔ blocked · ✅ done
 
-## Exit criterion
+## Exit criterion — ✅ MET (2026-07-07)
 
 Numbers replace the wall-clock model; roster seats have measured occupants; the
 grammar and decorrelation questions are settled by data; the two experimental
 bets (diversity, tiering) have **written** thresholds in `PREREGISTRATION.md`.
+**Verdict: proceed to Phase 1** — full summary and the corrections the plan must
+absorb are in [`PHASE0-EXIT.md`](PHASE0-EXIT.md).
 
 ## Layout
 
