@@ -3,9 +3,16 @@
 > An experiment in local-first agentic harness design — built on the foundation
 > and legacy of the [Resonance](#the-resonance-lineage) engine.
 
-**Status:** design phase. No runtime yet. This repository currently holds the
-architectural plan and its provenance; code lands phase by phase (see
-[`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases)).
+**Status:** Phase 0 (measure) ✅ and Phase 1 (kernel) ✅ complete — the kernel does
+real trivial-lane work on a live repo, standing alone, leaving a replayable
+ledger of harness-computed evidence. See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md)
+and [`phase1/README.md`](phase1/README.md). Later phases (spec state machine,
+panels, learning) land next, per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
+
+```bash
+# backend (Phase 0) up, then:
+python3 -m animal.cli run "Fix add() in calc.py to return a+b" --repo REPO --check "python3 check.py"
+```
 
 ---
 
