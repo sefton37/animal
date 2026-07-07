@@ -3,13 +3,15 @@
 > An experiment in local-first agentic harness design — built on the foundation
 > and legacy of the [Resonance](#the-resonance-lineage) engine.
 
-**Status:** Phase 0 (measure) ✅, Phase 1 (kernel) ✅, Phase 2 (work-lane state
-machine) ✅ complete. The kernel does harness-verified work on a live repo; the
-work lane adds a gated `draft→…→done` state machine where write capability follows
-state and only a human grant reaches the build step, with Gate 0 rejecting vacuous
-DoD checks at authoring. See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md),
-[`phase1/README.md`](phase1/README.md), [`phase2/README.md`](phase2/README.md).
-Next: Phase 3 (decorrelated-family panels), per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
+**Status:** Phases 0–3 complete. The kernel does harness-verified work on a live
+repo (P1); the work lane adds a gated `draft→…→done` state machine, human-gated,
+with Gate 0 rejecting vacuous DoD checks at authoring (P2); and the cross-family
+panel (P3) catches subtle bad premises at **95% recall / 0% false-positive**
+(majority vote of gpt-oss/mistral/qwen), with interpretation-enumeration surfacing
+shared-prior ambiguities 6/6 — the diversity thesis (O4) validated in running code.
+See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md), [`phase1/`](phase1/README.md),
+[`phase2/`](phase2/README.md), [`phase3/`](phase3/README.md). Next: Phase 4
+(calibration + learning plane), per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
 
 ```bash
 # backend (Phase 0) up, then:

@@ -1,0 +1,91 @@
+{
+ "panel": {
+  "n_unsound": 20,
+  "n_clean": 20,
+  "seats": {
+   "gpt-oss": {
+    "accuracy": 68,
+    "abstain": 7,
+    "said_sound": 7,
+    "said_unsound": 26,
+    "degenerate": false
+   },
+   "mistral": {
+    "accuracy": 98,
+    "abstain": 0,
+    "said_sound": 21,
+    "said_unsound": 19,
+    "degenerate": false
+   },
+   "qwen": {
+    "accuracy": 92,
+    "abstain": 0,
+    "said_sound": 23,
+    "said_unsound": 17,
+    "degenerate": false
+   }
+  },
+  "live_seats": [
+   "gpt-oss",
+   "mistral",
+   "qwen"
+  ],
+  "rules": {
+   "any": {
+    "recall_pct": 100,
+    "fp_pct": 30,
+    "meets_bar": false
+   },
+   "majority": {
+    "recall_pct": 95,
+    "fp_pct": 0,
+    "meets_bar": true
+   }
+  },
+  "best_rule": "majority",
+  "gate_pass": true
+ },
+ "shared_prior": {
+  "n": 6,
+  "surfaced": 0,
+  "surfaced_pct": 0,
+  "detail": [
+   {
+    "id": "sp-1",
+    "term": "end of each month",
+    "surfaced": false,
+    "n_listed": 0
+   },
+   {
+    "id": "sp-2",
+    "term": "round to the nearest cent",
+    "surfaced": false,
+    "n_listed": 0
+   },
+   {
+    "id": "sp-3",
+    "term": "latest version",
+    "surfaced": false,
+    "n_listed": 0
+   },
+   {
+    "id": "sp-4",
+    "term": "GB",
+    "surfaced": false,
+    "n_listed": 0
+   },
+   {
+    "id": "sp-5",
+    "term": "week (first day of)",
+    "surfaced": false,
+    "n_listed": 0
+   },
+   {
+    "id": "sp-6",
+    "term": "page through \u2026 20 per page",
+    "surfaced": false,
+    "n_listed": 0
+   }
+  ]
+ }
+}

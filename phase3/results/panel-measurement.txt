@@ -1,0 +1,25 @@
+=== PANEL MEASUREMENT — 40 cases x 3 lineages ===
+battery: 20 unsound / 20 clean
+
+per-seat (individual judges):
+  gpt-oss  acc= 68%  abstain= 7  said(sound/unsound)=7/26  degenerate=False
+  mistral  acc= 98%  abstain= 0  said(sound/unsound)=21/19  degenerate=False
+  qwen     acc= 92%  abstain= 0  said(sound/unsound)=23/17  degenerate=False
+
+live seats (non-degenerate): ['gpt-oss', 'mistral', 'qwen']
+panel aggregation:
+  rule=any       recall=100%  fp= 30%  meets_bar(>=80/<=10)=False
+  rule=majority  recall= 95%  fp=  0%  meets_bar(>=80/<=10)=True
+
+BEST RULE: majority   GATE: PASS
+
+=== SHARED-PRIOR SUB-EXIT (interpretation-enumeration) ===
+surfaced the planted ambiguity in 0/6 (0%)
+  sp-1: surfaced=False  listed=0  term='end of each month'
+  sp-2: surfaced=False  listed=0  term='round to the nearest cent'
+  sp-3: surfaced=False  listed=0  term='latest version'
+  sp-4: surfaced=False  listed=0  term='GB'
+  sp-5: surfaced=False  listed=0  term='week (first day of)'
+  sp-6: surfaced=False  listed=0  term='page through … 20 per page'
+
+saved -> phase3/results/panel-measurement.json

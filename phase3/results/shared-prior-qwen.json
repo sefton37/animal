@@ -1,0 +1,43 @@
+{
+ "n": 6,
+ "surfaced": 6,
+ "surfaced_pct": 100,
+ "detail": [
+  {
+   "id": "sp-1",
+   "term": "end of each month",
+   "surfaced": true,
+   "n_listed": 7
+  },
+  {
+   "id": "sp-2",
+   "term": "round to the nearest cent",
+   "surfaced": true,
+   "n_listed": 7
+  },
+  {
+   "id": "sp-3",
+   "term": "latest version",
+   "surfaced": true,
+   "n_listed": 5
+  },
+  {
+   "id": "sp-4",
+   "term": "GB",
+   "surfaced": true,
+   "n_listed": 6
+  },
+  {
+   "id": "sp-5",
+   "term": "week (first day of)",
+   "surfaced": true,
+   "n_listed": 5
+  },
+  {
+   "id": "sp-6",
+   "term": "page through \u2026 20 per page",
+   "surfaced": true,
+   "n_listed": 5
+  }
+ ]
+}

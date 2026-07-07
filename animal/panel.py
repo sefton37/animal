@@ -177,7 +177,9 @@ def enumerate_case(seat: dict, shared_case: dict, url: str | None = None) -> lis
 def measure_shared_prior(shared_cases: list[dict], seat=None, url: str | None = None) -> dict:
     """Does interpretation-enumeration surface the planted ambiguity that a
     construct-a-failure panel would miss?"""
-    seat = seat or JUDGE_SEATS[0]
+    # gpt-oss's reasoning channel returns empty content on the nested-enumeration
+    # schema (measured); default to a non-reasoning seat for enumeration.
+    seat = seat or next((s for s in JUDGE_SEATS if s["name"] == "qwen"), JUDGE_SEATS[-1])
     hits, detail = 0, []
     for sc in shared_cases:
         amb = enumerate_case(seat, sc, url)
