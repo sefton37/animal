@@ -1,0 +1,12 @@
+=== PATCH FARM — 6 tasks x k=5 candidates (coder=qwen, selector=mistral) ===
+
+BATCH: farm solved 6/6   vs single-attempt(temp0.2) 5/6
+
+  ob-1  changed 5/5  passed-tests 5/5 (temps [0.2, 0.5, 0.7, 0.9, 1.1])  1st-attempt=True  SOLVED=True (winner temp 0.2)
+  ob-2  changed 4/5  passed-tests 4/5 (temps [0.5, 0.7, 0.9, 1.1])  1st-attempt=False  SOLVED=True (winner temp 0.5)
+  op-1  changed 5/5  passed-tests 5/5 (temps [0.2, 0.5, 0.7, 0.9, 1.1])  1st-attempt=True  SOLVED=True (winner temp 0.2)
+  op-2  changed 5/5  passed-tests 3/5 (temps [0.2, 0.5, 0.9])  1st-attempt=True  SOLVED=True (winner temp 0.2)
+  st-1  changed 5/5  passed-tests 4/5 (temps [0.2, 0.7, 0.9, 1.1])  1st-attempt=True  SOLVED=True (winner temp 0.2)
+  st-2  changed 5/5  passed-tests 5/5 (temps [0.2, 0.5, 0.7, 0.9, 1.1])  1st-attempt=True  SOLVED=True (winner temp 0.2)
+
+saved -> phase3/results/patch-farm.json

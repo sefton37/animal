@@ -1,0 +1,106 @@
+{
+ "n_tasks": 6,
+ "k": 5,
+ "farm_solved": 6,
+ "first_attempt_solved": 5,
+ "results": [
+  {
+   "id": "ob-1",
+   "k": 5,
+   "n_changed": 5,
+   "n_pass": 5,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt_pass": true,
+   "farm_solved": true,
+   "winner_temp": 0.2,
+   "selector_reason": "All candidates are identical and correctly fix the issue by changing the range in the for loop to include the entire length of the sequence. The original code missed the last chunk because it subtract"
+  },
+  {
+   "id": "ob-2",
+   "k": 5,
+   "n_changed": 4,
+   "n_pass": 4,
+   "pass_temps": [
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt_pass": false,
+   "farm_solved": true,
+   "winner_temp": 0.5,
+   "selector_reason": "selector failed/out-of-range; took first survivor"
+  },
+  {
+   "id": "op-1",
+   "k": 5,
+   "n_changed": 5,
+   "n_pass": 5,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt_pass": true,
+   "farm_solved": true,
+   "winner_temp": 0.2,
+   "selector_reason": "selector failed/out-of-range; took first survivor"
+  },
+  {
+   "id": "op-2",
+   "k": 5,
+   "n_changed": 5,
+   "n_pass": 3,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.9
+   ],
+   "first_attempt_pass": true,
+   "farm_solved": true,
+   "winner_temp": 0.2,
+   "selector_reason": "selector failed/out-of-range; took first survivor"
+  },
+  {
+   "id": "st-1",
+   "k": 5,
+   "n_changed": 5,
+   "n_pass": 4,
+   "pass_temps": [
+    0.2,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt_pass": true,
+   "farm_solved": true,
+   "winner_temp": 0.2,
+   "selector_reason": "Candidate 0 is the smallest and clearest fix that matches the task. It changes the default argument from `tags=[]` to `tags=None` and adds a simple check to initialize `tags` as an empty list if it is"
+  },
+  {
+   "id": "st-2",
+   "k": 5,
+   "n_changed": 5,
+   "n_pass": 5,
+   "pass_temps": [
+    0.2,
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "first_attempt_pass": true,
+   "farm_solved": true,
+   "winner_temp": 0.2,
+   "selector_reason": "Candidate 0 is the best choice because it renames the `samples` list to `_numbers` to indicate that it's an internal attribute of the class, which is a good practice for encapsulation. It also removes"
+  }
+ ]
+}

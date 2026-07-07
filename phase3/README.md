@@ -60,11 +60,32 @@ fallback (single-judge + human) is not triggered.
 `tests/test_phase3.py` — 4 offline tests (aggregation rules, abstain/degeneracy
 guards, recall/FP arithmetic). Total suite: 28 green across Phases 1–3.
 
-## Deferred (the one Phase-3 lane not built here)
-- **Candidate-sampling / patch farm**: sample k patches from the resident coder,
-  filter by harness-run tests, cross-family selector picks the winner. Most
-  meaningful against a real scoped backlog (Cairn trim P2–P5) and a substantial
-  GPU-heavy build — noted as the next Phase-3 increment.
+## Candidate-sampling / patch farm — DONE (`animal/candidates.py`)
+
+Diverse GENERATION filtered by objective tests, then cross-family selection —
+the generation-side counterpart to the panel. Sample k coder attempts at spread
+temperatures (single family in generation, per Self-MoA) → test-filter (the
+harness runs the task's test on each) → a cross-family selector (mistral) picks
+among the survivors (objective filters first, model judgment last, per CodeMonkeys).
+
+**Result** (6 self-contained bugs, k=5, coder=qwen, selector=mistral):
+
+| Metric | Result |
+|--------|--------|
+| **Farm solved** | **6/6** |
+| Single-attempt (temp 0.2) baseline | 5/6 |
+
+The farm recovered a fix a single attempt missed: `ob-2` (an `n=0` slice bug)
+failed at temp 0.2 but passed at temps 0.5–1.1 — the test-filter kept the winners.
+Candidate pass rates ranged 3/5–5/5 across tasks, confirming temperature diversity
+matters (some samples fail; the objective filter keeps the ones that pass). This is
+the Agentless insight realized on-box: cheap local tokens → sample many → recover
+misses.
+
+*Honest caveats:* these are easy single-file bugs, so the sampling gain is modest
+(6/6 vs 5/6) — on harder tasks and larger k the gap widens (Agentless sampled ~40).
+The backlog is a constructed 6-bug set; pointing the farm at a real scoped backlog
+(Cairn trim P2–P5) is the production use. Results in `results/patch-farm.{txt,json}`.
 
 ## Deferred to Phase 4
 - Calibration + the learning plane (per-seat detection-value scoring feeds panel

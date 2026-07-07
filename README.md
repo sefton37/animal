@@ -8,7 +8,9 @@ repo (P1); the work lane adds a gated `draft→…→done` state machine, human-
 with Gate 0 rejecting vacuous DoD checks at authoring (P2); and the cross-family
 panel (P3) catches subtle bad premises at **95% recall / 0% false-positive**
 (majority vote of gpt-oss/mistral/qwen), with interpretation-enumeration surfacing
-shared-prior ambiguities 6/6 — the diversity thesis (O4) validated in running code.
+shared-prior ambiguities 6/6, and the patch-farm lane (sample-k + test-filter +
+cross-family select) solving 6/6 vs 5/6 single-attempt — the diversity thesis (O4)
+validated in running code, on both the judgment and generation sides.
 See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md), [`phase1/`](phase1/README.md),
 [`phase2/`](phase2/README.md), [`phase3/`](phase3/README.md). Next: Phase 4
 (calibration + learning plane), per [`docs/ARCHITECTURE.md` §Build phases](docs/ARCHITECTURE.md#build-phases).
