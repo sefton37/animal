@@ -30,6 +30,15 @@ ROLES = {
     "architect": {"model": "architect",  "max_tokens": 2048, "temperature": 0.3, "num_ctx": 32768, "edit_format": "json"},
     "judge":     {"model": "judge",      "max_tokens": 1024, "temperature": 0.0, "num_ctx": 8192,  "edit_format": "json"},
     "auditor":   {"model": "auditor",    "max_tokens": 512,  "temperature": 0.0, "num_ctx": 8192,  "edit_format": "json"},
+    # Story #457: the product-owner role authors a Spec from a plain-language user
+    # story. Rides the already-provisioned "architect" GPU seat (a thinking model
+    # with a generous 32768 context is the right fit for decomposing a story into
+    # intent/out_of_scope/DoD) -- no new GPU seat, no new roster entry. max_tokens
+    # is 8192 (well above the other roles' 2048) because architect is a "thinking"
+    # model: a live round-trip showed its chain-of-thought alone can run into the
+    # thousands of tokens before it ever emits the schema-constrained JSON content
+    # -- 2048 measured empty (finish_reason=length, content="") on a real call.
+    "product_owner": {"model": "architect", "max_tokens": 8192, "temperature": 0.2, "num_ctx": 32768, "edit_format": "json"},
 }
 
 # Loop bounds (mini-swe-agent-shaped: hard caps, not open-ended).

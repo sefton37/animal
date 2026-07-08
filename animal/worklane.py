@@ -26,6 +26,34 @@ def _finish(L, task, traj, extra) -> dict:
     return s
 
 
+def run_work_from_story(user_story: str, repo: str, approver=None, po_role: str = "product_owner",
+                        po_max_retries: int = 2, po_timeout: int = 600, **kw) -> dict:
+    """Story #457: the maker gives a raw, plain-language user_story; a
+    product-owner model call authors the Spec (intent/out_of_scope/DoD) via
+    animal.product_owner.author_spec, which already round-trips it through
+    Spec.from_dict + dod.validate_check before returning -- so the SAME
+    grounding/authoring-validation chain in run_work below runs UNCHANGED on a
+    model-authored spec exactly as it does on a hand-authored one (a
+    vacuous/ungrounded model-authored spec is rejected exactly as a
+    hand-authored one would be). author_spec raises ProductOwnerError (never
+    silently) if it can't produce a valid, non-vacuous spec within
+    po_max_retries corrective attempts -- that error propagates here, so a
+    maker never gets a rejected/degraded spec back disguised as a normal run.
+    po_timeout (seconds, per model call) defaults to 600 -- see
+    animal.product_owner._chat's docstring for why a real call can legitimately
+    take minutes on a contended host."""
+    from .product_owner import author_spec
+    spec = author_spec(user_story, repo, role=po_role, max_retries=po_max_retries, timeout=po_timeout)
+    # #457 red-team: a MODEL-authored spec lacks the human's implicit check-authoring
+    # scrutiny that Gate 0 always quietly relied on. Gate 0 catches STRUCTURAL badness
+    # (vacuous/ungrounded checks) but not SEMANTIC badness (a check whose plausible
+    # name doesn't match what its argv actually tests). So the cross-family premise
+    # panel (Gate 0c, built for exactly this gameable-check class) runs BY DEFAULT on a
+    # model-authored spec -- the caller can still override premise_panel explicitly.
+    kw.setdefault("premise_panel", True)
+    return run_work(spec, repo, approver=approver, **kw)
+
+
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
              ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False,
              learn: bool = False, include_repo_map: bool = True) -> dict:
@@ -62,8 +90,19 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
         L.append(EventType.GATE, {"gate": "premise_panel", "verdict": finding["panel_verdict"],
                                   "per_seat": finding["per_seat"], "reasons": finding["reasons"]})
 
-    # Human approval over the real channel (a model has no action that reaches this)
-    summary_line = f"Spec {spec.id}: {spec.user_story}\nDoD checks: {[c.name for c in spec.dod]}"
+    # Human approval over the real channel (a model has no action that reaches this).
+    # #457 red-team: show each check's BODY (argv/comparator/expected), not just its
+    # name -- a model-authored check with a plausible name but a trivial, story-
+    # irrelevant body is invisible when only names are shown, and Gate 0 catches
+    # structural, not semantic, badness. The approver must be able to read what each
+    # check ACTUALLY tests before approving.
+    def _check_line(c):
+        exp = getattr(c, "expected", "") or ""
+        tail = f" [{c.comparator}{': ' + exp if exp else ''}]"
+        return f"  - {c.name}: `{' '.join(c.argv)}`{tail}"
+    summary_line = (f"Spec {spec.id}: {spec.user_story}\n"
+                    f"DoD checks (verify each check actually tests the story):\n"
+                    + "\n".join(_check_line(c) for c in spec.dod))
     if finding and finding["flagged"]:
         summary_line += ("\n\n[PREMISE PANEL FLAGGED this spec as UNSOUND — checks may pass while the "
                          "story is violated]\n" + "\n".join(
