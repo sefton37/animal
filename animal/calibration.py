@@ -15,7 +15,8 @@ from . import config
 from .types import ErrorClass
 
 # faults that are NOT the model's fault -> excluded from calibration (the taxonomy)
-_EXCLUDE = {ErrorClass.HARNESS_FAULT.value, ErrorClass.ENV_MISMATCH.value}
+_EXCLUDE = {ErrorClass.HARNESS_FAULT.value, ErrorClass.ENV_MISMATCH.value,
+            ErrorClass.OTHER_ACTOR_FAULT.value}
 _NEUTRAL = 0.5   # prior for an untested (model, role, claim_type)
 
 
@@ -68,11 +69,22 @@ class Calibration:
 
     # --- projections from verified sources (calibration is a projection of the ledger) ---
 
-    def ingest_ledger(self, ledger) -> int:
+    def ingest_ledger(self, ledger, role: str | None = None) -> int:
         """Walk a run ledger; for each ACTION its following ENVELOPE is the verified
-        outcome. Records (role's model, role, action_kind, envelope.ok)."""
+        outcome. Records (role's model, role, action_kind, envelope.ok).
+
+        role (Story #459 red-team fix): explicit attribution override. A shared
+        work-lane ledger's FIRST session_start is worklane's own, which carries
+        no 'role' key, so the heuristic below always fell back to 'coder' --
+        silently disagreeing with the verifier gate's implementer_role in the
+        very same run. A caller that knows the acting role (worklane does)
+        passes it. Known limit, documented not hidden: under tdd=True the
+        shared ledger also contains the TESTER's actions, which this
+        whole-ledger walk attributes to the same role; per-phase attribution
+        is future work."""
         evs = ledger.replay()
-        role = next((e.payload.get("role") for e in evs if e.type == "session_start"), None) or "coder"
+        if role is None:
+            role = next((e.payload.get("role") for e in evs if e.type == "session_start"), None) or "coder"
         model = config.ROLES.get(role, {}).get("model", role)
         n = 0
         pending = None

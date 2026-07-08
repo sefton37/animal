@@ -812,6 +812,275 @@ def test_tdd_self_rewriting_tester_test_cannot_reach_done():
     assert r["final_state"] == "needs_human", r
 
 
+# --- Story #459: the verifier gate -- claimed-vs-verified into calibration ---
+
+def _verifier_events(summary):
+    events = [json.loads(l) for l in Path(summary["ledger"]).read_text().splitlines()]
+    return [e for e in events if e["type"] == "gate" and e["payload"].get("gate") == "verifier"]
+
+
+def test_verifier_gate_records_model_claim_false():
+    """The founding-incident class as DATA: the model claims completion
+    (finished=True) but the harness's DoD verdict refutes it. The calibration
+    row for (model, role, 'task_complete') must gain n WITHOUT n_true, and the
+    ledger's verifier GATE must carry error_class=model_claim_false."""
+    from animal.calibration import Calibration
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0,
+                "finished": True}   # the model CLAIMS completion...
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r        # ...the harness says no
+    cal = Calibration(db_path=caldb)
+    rate = cal.rate("coder", "coder", "task_complete")
+    cal.close()
+    assert rate["n"] == 1 and rate["p"] == 0.0, rate   # n incremented, n_true unchanged
+    ver = _verifier_events(r)
+    assert len(ver) == 1, ver
+    p = ver[0]["payload"]
+    assert p["claimed_done"] is True and p["verified_true"] is False, p
+    assert p["error_class"] == "model_claim_false", p
+    assert p["calibration_recorded"] is True, p
+
+
+def test_verifier_gate_records_verified_true_claim():
+    """The happy path: claim AND harness verdict agree -> verified_true=True,
+    n and n_true both increment, error_class stays none."""
+    from animal.calibration import Calibration
+    repo = _repo("def add(a,b):\n    return a + b\n")   # already correct
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0,
+                "finished": True}
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero",
+            regression=True)])   # passes pre-work by design -- opt out of the negative-control
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "done", r
+    cal = Calibration(db_path=caldb)
+    rate = cal.rate("coder", "coder", "task_complete")
+    cal.close()
+    assert rate["n"] == 1 and rate["p"] == 1.0, rate
+    p = _verifier_events(r)[0]["payload"]
+    assert p["claimed_done"] is True and p["verified_true"] is True, p
+    assert p["error_class"] == "none", p
+
+
+def test_verifier_gate_no_claim_records_nothing_and_state_unchanged():
+    """AC read-only clause, both directions: (a) a run with NO claim
+    (finished absent -- max_turns/stuck) still reaches 'done' purely on the
+    harness verdict, proving the state transition ignores claimed_done; and
+    (b) a no-claim run writes NO calibration row at all -- it says nothing
+    about the model's claim reliability. Together with
+    test_verifier_gate_records_model_claim_false (claim=True + verdict=False
+    -> needs_human), every claim/verdict combination lands exactly where
+    all_pass alone dictates."""
+    from animal.calibration import Calibration
+    repo = _repo("def add(a,b):\n    return a + b\n")   # already correct
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0}  # no finish claim
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero",
+            regression=True)])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "done", r               # state driven by the verdict alone
+    cal = Calibration(db_path=caldb)
+    rate = cal.rate("coder", "coder", "task_complete")
+    cal.close()
+    assert rate["n"] == 0, rate                        # no claim -> no calibration row
+    p = _verifier_events(r)[0]["payload"]
+    assert p["claimed_done"] is False and p["verified_true"] is False, p
+    assert p["error_class"] == "none", p
+    assert p["calibration_recorded"] is None, p        # no claim -> nothing to record
+
+
+# --- Story #459 red-team fixes: observational purity + faithful attribution ---
+
+def test_verifier_gate_calibration_failure_cannot_change_the_outcome():
+    """THE red-team blocker: an unguarded calibration write between the
+    dod_verify gate and the state transition crashed the whole run on any
+    sqlite unavailability -- and only when the model CLAIMED, so the model's
+    own claim determined run survival, and the run preferentially killed was
+    exactly the model_claim_false run this gate exists to capture. The write
+    is now crash-proof: the run must complete to its harness-driven state,
+    with the failure recorded IN the verifier GATE event."""
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    bad_caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "no" / "such" / "dir" / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0,
+                "finished": True}   # the model claims -- previously the fatal combination
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              calibration_db=bad_caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r        # run SURVIVED to its harness verdict
+    p = _verifier_events(r)[0]["payload"]
+    assert p["error_class"] == "model_claim_false", p  # the claim verdict is still recorded...
+    assert p["calibration_recorded"] is False, p       # ...and the write failure is data,
+    assert "calibration_error" in p, p                 # not a control-flow event
+
+
+def test_verifier_gate_tester_artifact_fault_not_charged_to_implementer():
+    """Red-team attribution fix: under tdd=True, an implementer that TRUTHFULLY
+    completes the spec (dod passes) but is blocked by the tester's own
+    out-of-scope test (genuine red, unsatisfiable within spec scope, artifact
+    untouched) must not have its task_complete row charged -- that failure is
+    the TESTER's artifact quality. The event names other_actor_fault; the
+    exclusion taxonomy keeps the row empty; the task still lands needs_human
+    on the harness verdict exactly as before."""
+    from animal.calibration import Calibration
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        if role == "tester":
+            # out-of-scope: asserts a function the spec never asked for --
+            # genuinely red now AND after a truthful implementation
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_scope.py").write_text("import calc\nassert calc.mul(2, 3) == 6\n")
+            return {"run_diff": "diff --git a/tests/test_scope.py b/tests/test_scope.py\n",
+                    "changed_paths": ["tests/test_scope.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        # the implementer TRUTHFULLY makes the spec's DoD pass and claims so
+        (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return a + b\n")
+        return {"run_diff": "diff --git a/calc.py b/calc.py\n", "changed_paths": ["calc.py"],
+                "turns": 2, "changed": True, "edits_landed": 1, "finished": True}
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              tdd=True, calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r        # harness verdict unchanged
+    assert r["dod_all_pass"] is True and r["tester_test_pass"] is False, r
+    p = _verifier_events(r)[0]["payload"]
+    assert p["error_class"] == "other_actor_fault", p
+    cal = Calibration(db_path=caldb)
+    rate = cal.rate("coder", "coder", "task_complete")
+    cal.close()
+    assert rate["n"] == 0, rate                        # excluded: not the implementer's conduct
+
+
+def test_verifier_gate_env_fault_not_charged_to_implementer():
+    """Red-team attribution fix: a DoD check that fails because its command
+    could not run at all (exit 127) is the environment's fault, not a false
+    claim -- error_class env_mismatch, excluded from the implementer's row."""
+    from animal.calibration import Calibration
+    repo = _repo()
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0,
+                "finished": True}
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("run the thing", dod=[DoDCheck(
+            "env-check", ["bash", "-c", "animal_definitely_missing_cmd_xyz"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r
+    p = _verifier_events(r)[0]["payload"]
+    assert p["error_class"] == "env_mismatch", p
+    cal = Calibration(db_path=caldb)
+    rate = cal.rate("coder", "coder", "task_complete")
+    cal.close()
+    assert rate["n"] == 0, rate                        # excluded: not the model's fault
+
+
+def test_learn_uses_the_same_calibration_db_and_role():
+    """Red-team split-brain fix: learn=True must ingest into the SAME
+    calibration_db the verifier gate used (a bare Calibration() split one
+    run's rows across two databases), attributed to the implementer_role the
+    gate used (the shared ledger's first session_start has no role, so the
+    old heuristic silently fell back to 'coder')."""
+    from animal.calibration import Calibration
+    repo = _repo("def add(a,b):\n    return a + b\n")   # already correct
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        if ledger is not None:   # make the ledger carry one action->envelope pair to ingest
+            from animal.types import EventType
+            ledger.append(EventType.ACTION, {"kind": "read"})
+            ledger.append(EventType.ENVELOPE, {"ok": True, "error_class": "none"})
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0,
+                "finished": True}
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero",
+            regression=True)])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              learn=True, implementer_role="architect", calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "done", r
+    cal = Calibration(db_path=caldb)
+    task_rate = cal.rate("architect", "architect", "task_complete")
+    action_rate = cal.rate("architect", "architect", "read")
+    cal.close()
+    assert task_rate["n"] == 1, task_rate              # the verifier gate's row...
+    assert action_rate["n"] == 1, action_rate          # ...and learn's ingest, SAME db, SAME role
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -85,7 +85,8 @@ from .human import ApprovalService
 from .grounding import ground
 from .dod import validate_spec, run_check
 from .loop import run_task
-from .types import EventType
+from .types import EventType, ErrorClass
+from . import config
 
 
 # Story #458: the tester role's system prompt -- a narrower variant of
@@ -314,7 +315,7 @@ def run_work_from_story(user_story: str, repo: str, approver=None, po_role: str 
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
              ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False,
              learn: bool = False, include_repo_map: bool = True, tdd: bool = False,
-             tester_role: str = "tester") -> dict:
+             tester_role: str = "tester", calibration_db=None) -> dict:
     L = Ledger(ledger_dir=ledger_dir)
     sb = Sandbox()
     task = Task(spec)
@@ -423,11 +424,79 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
     tester_test_pass = (all(r["passed"] for r in tester_test_results)
                         and not tester_modified) if tester_pins else True
     all_pass = dod_pass and tester_test_pass
-    L.append(EventType.GATE, {"gate": "dod_verify", "all_pass": all_pass, "dod_pass": dod_pass,
+    L.append(EventType.GATE, {"gate": "dod_verify", "all_pass": all_pass, "dod_all_pass": dod_pass,
                               "results": [{"name": r["name"], "passed": r["passed"]} for r in results],
                               **({"tester_test_results": tester_test_results,
                                   "tester_artifact_modified": tester_modified,
                                   "tester_test_pass": tester_test_pass} if tester_pins else {})})
+
+    # Story #459: the VERIFIER gate -- claimed-vs-verified, recorded as DATA.
+    # claimed_done is the model's own completion claim (it called finish);
+    # verified_true is that claim AND'd with the harness verdict that actually
+    # drives the state transition below. A claim the harness refutes is the
+    # founding-incident class (model_claim_false) -- captured in the ledger AND
+    # charged to the model's calibration row, never left as an unresolvable
+    # prose claim. Only a MADE claim is calibratable: a no-claim run
+    # (max_turns, stuck) says nothing about the model's claim reliability, so
+    # nothing is recorded. Read-only w.r.t. the transition: done vs needs_human
+    # stays driven exclusively by the harness's all_pass (Law 2 -- no model
+    # declares pass/fail, and no calibration state ever feeds back into it).
+    # dod_all_pass in this event keeps its summary meaning (spec.dod only);
+    # all_pass is the done-driving signal verified_true is judged against.
+    claimed_done = bool(build.get("finished"))
+    verified_true = claimed_done and all_pass
+    # Attribution ladder (red-team fix): the implementer's calibration row is
+    # charged only for the implementer's OWN conduct. A failing check whose
+    # command itself could not run (exit 126/127: not executable / not found)
+    # is the ENVIRONMENT's fault; spec.dod passing while the tester's own,
+    # UNMODIFIED test fails is the TESTER's artifact quality blocking a
+    # truthful claim -- both are named in the event but excluded from the
+    # implementer's arithmetic by the taxonomy (calibration._EXCLUDE). A
+    # gutted tester artifact stays the implementer's fault. Without this
+    # ladder the only reachable classes here were model_claim_false|none,
+    # making the taxonomy's protective exclusion dead code for exactly the
+    # claim type it was built to protect.
+    env_fault = any((not r["passed"]) and r.get("exit_code") in (126, 127) for r in results)
+    tester_artifact_fault = (bool(tester_pins) and dod_pass
+                             and not tester_modified and not tester_test_pass)
+    if not claimed_done or verified_true:
+        verifier_error = ErrorClass.NONE.value
+    elif env_fault:
+        verifier_error = ErrorClass.ENV_MISMATCH.value
+    elif tester_artifact_fault:
+        verifier_error = ErrorClass.OTHER_ACTOR_FAULT.value
+    else:
+        verifier_error = ErrorClass.MODEL_CLAIM_FALSE.value
+    # Observational purity (red-team blocker fix): the calibration write must
+    # NEVER alter what state the task reaches -- least of all conditioned on
+    # the model's own claim (an unguarded write here crashed the run only
+    # when the model claimed, preferentially killing exactly the
+    # model_claim_false run the gate exists to capture). The GATE event below
+    # is the durable record either way: on a write failure it carries
+    # calibration_recorded=False plus the error, and calibration can be
+    # re-projected from the ledger later. calibration_recorded=True means the
+    # write path completed -- an EXCLUDED error_class (env/other-actor) still
+    # completes while deliberately not charging the row; null means no claim
+    # was made, so there was nothing to record.
+    calibration_recorded, calibration_error = None, None
+    if claimed_done:
+        from .calibration import Calibration
+        model = config.ROLES.get(implementer_role, {}).get("model", implementer_role)
+        try:
+            cal = Calibration(db_path=calibration_db)
+            cal.record(model, implementer_role, 'task_complete', verified_true=verified_true,
+                       error_class=verifier_error)
+            cal.close()
+            calibration_recorded = True
+        except Exception as e:                 # sqlite unavailable / locked / read-only
+            calibration_recorded = False
+            calibration_error = f"{type(e).__name__}: {e}"
+    L.append(EventType.GATE, {"gate": "verifier", "claimed_done": claimed_done,
+                              "dod_all_pass": dod_pass, "all_pass": all_pass,
+                              "verified_true": verified_true, "error_class": verifier_error,
+                              "calibration_recorded": calibration_recorded,
+                              **({"calibration_error": calibration_error} if calibration_error else {})})
+
     task.transition("done" if all_pass else "needs_human"); traj.append(task.state)
 
     # Learning plane (opt-in): learn from the VERIFIED outcome of this run — record
@@ -436,7 +505,16 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
     if learn:
         from .calibration import Calibration
         from .lessons import Lessons
-        cal = Calibration(); n_cal = cal.ingest_ledger(L); cal.close()
+        # Story #459 red-team fix: honor the SAME calibration_db the verifier
+        # gate used (a bare Calibration() here split one run's rows across two
+        # databases -- and pulled tests that dutifully redirected the gate
+        # back into polluting production var/learning.db). role=implementer_role
+        # keeps action-level attribution consistent with the verifier gate:
+        # the shared work-lane ledger's first session_start carries no role,
+        # so ingest_ledger's heuristic silently fell back to 'coder'.
+        cal = Calibration(db_path=calibration_db)
+        n_cal = cal.ingest_ledger(L, role=implementer_role)
+        cal.close()
         les = Lessons()
         paths = [g["ref"] for g in spec.groundings if g.get("exists")]
         n_les = 0

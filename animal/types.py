@@ -41,6 +41,10 @@ class ErrorClass(str, Enum):
     NON_PERSISTENCE = "non_persistence"          # claimed an edit that left no diff
     HARNESS_FAULT = "harness_fault"              # the kernel itself failed
     ENV_MISMATCH = "env_mismatch"                # pinned environment wrong (not the model's fault)
+    OTHER_ACTOR_FAULT = "other_actor_fault"      # a DIFFERENT role's artifact caused this failure
+                                                 # (Story #459: e.g. the tester's out-of-scope test
+                                                 # blocks the implementer's truthful claim) --
+                                                 # excluded from the charged model's calibration
     SANDBOX_DENIED = "sandbox_denied"            # action hit the sandbox wall (-> escalation)
     INVARIANT_VIOLATION = "invariant_violation"  # read-before-edit / staleness / out-of-grant
     FLAKE_RETRY_PASSED = "flake_retry_passed"

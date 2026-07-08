@@ -155,7 +155,11 @@ def test_worklane_build_step_includes_repo_map_by_default():
     try:
         spec = Spec("fix add so it sums", dod=[DoDCheck(
             "sums", ["python3", "-c", "import target; assert target.add(2,3)==5"], "exit_zero")])
-        run_work(spec, str(fixture), approver=lambda k, s: "approve", ledger_dir=ledger_dir, max_turns=3)
+        # calibration_db redirect (#459): this scripted plane CLAIMS finish, so
+        # without it the verifier gate would write a fabricated task_complete
+        # row into the real var/learning.db on every suite run
+        run_work(spec, str(fixture), approver=lambda k, s: "approve", ledger_dir=ledger_dir, max_turns=3,
+                 calibration_db=str(Path(ledger_dir) / "learning.db"))
     finally:
         loop.ModelPlane = orig
     assert plane.first_messages is not None, "the build step never reached the model call"
