@@ -44,6 +44,12 @@ ROLES = {
     # (a new or modified tests/test_*.py file), so it rides the already-
     # provisioned "coder" GPU seat -- no new GPU seat, no new roster entry.
     "tester": {"model": "coder", "max_tokens": 2048, "temperature": 0.2, "num_ctx": 32768, "edit_format": "json"},
+    # Story #462: discovery converses (ask/propose_story/finish only). Rides
+    # the architect seat -- no new GPU seat. turn_schema selects the
+    # conversation-only constrained grammar (model.DISCOVERY_TURN_SCHEMA):
+    # edit/shell are absent at the DECODER, not merely discouraged in prose.
+    "discovery": {"model": "architect", "max_tokens": 2048, "temperature": 0.4, "num_ctx": 32768,
+                  "edit_format": "json", "turn_schema": "discovery"},
 }
 
 # Loop bounds (mini-swe-agent-shaped: hard caps, not open-ended).

@@ -20,6 +20,9 @@ def main(argv=None):
                    help="omit the compact repo file/symbol map from the system prompt "
                         "(Story #449: included by default so the coder can request the right "
                         "file directly instead of groping by trial-and-error grep/read)")
+    d = sub.add_parser("discover", help="bounded conversational discovery: decompose a topic into raw user stories (#462)")
+    d.add_argument("topic")
+    d.add_argument("--max-turns", type=int, default=None)
     sub.add_parser("learn", help="inspect the learning plane (calibration, lessons, incidents, health) — read-only")
     b = sub.add_parser("backlog", help="read/write the local product backlog (epics + stories) — #452 CRUD")
     bsub = b.add_subparsers(dest="backlog_cmd", required=True)
@@ -48,6 +51,22 @@ def main(argv=None):
         print("\n--- computed run diff ---\n" + (s["run_diff"] or "(no changes on disk)"))
         # exit non-zero if any harness-run check failed (real verdict, not a claim)
         return 0 if all(c["ok"] for c in s["checks"]) else 1
+
+    if args.cmd == "discover":
+        from .discovery import run_discovery
+        from .ledger import Ledger
+        L = Ledger()
+        stories = run_discovery(args.topic, ledger=L, max_turns=args.max_turns)
+        ends = L.events_of("session_end")
+        status = ends[-1].payload.get("status", "?") if ends else "?"
+        print(json.dumps({"status": status, "stories": stories}, indent=2))
+        # Red-team fix: zero stories from a session that DIED (model server
+        # down, maker absent, context fault) is a FAILURE and must exit
+        # non-zero -- an empty result from a finished conversation is a real
+        # (if disappointing) outcome and exits 0. The status field makes the
+        # difference visible either way.
+        died = status in ("model_error", "maker_absent", "channel_error", "context_overflow")
+        return 1 if (died and not stories) else 0
 
     if args.cmd == "learn":
         from .calibration import Calibration

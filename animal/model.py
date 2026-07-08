@@ -32,6 +32,37 @@ TURN_SCHEMA = {
     },
 }
 
+# Story #462: the turn grammar is per-LANE. The work-lane schema above closes
+# action.kind to read/grep/edit/shell/finish, which makes the discovery
+# vocabulary token-level IMPOSSIBLE under constrained decoding -- caught while
+# wiring the discovery role (a mocked test can never see this; the grammar
+# lives in the real llama-server call). Discovery gets its own closed grammar:
+# conversation-only, no edit, no shell -- capability absent by construction at
+# the DECODER, not just by prompt.
+DISCOVERY_TURN_SCHEMA = {
+    "type": "object", "required": ["thought", "action"],
+    "properties": {
+        "thought": {"type": "string"},
+        "action": {
+            "type": "object", "required": ["kind"],
+            "properties": {
+                "kind": {"type": "string", "enum": ["ask", "propose_story", "finish"]},
+                "question": {"type": "string"},
+                "title": {"type": "string"}, "narrative": {"type": "string"},
+                "notes": {"type": "string"}, "message": {"type": "string"},
+            },
+        },
+    },
+}
+
+
+def turn_schema_for(role_cfg: dict) -> dict:
+    """The constrained-decoding schema this role's turns are held to --
+    selected by the role's `turn_schema` config key ('discovery' or the
+    default work-lane protocol)."""
+    return DISCOVERY_TURN_SCHEMA if role_cfg.get("turn_schema") == "discovery" else TURN_SCHEMA
+
+
 SYSTEM_PROMPT = """You are an agent working inside a code workspace. Each turn, respond with EXACTLY ONE JSON object:
 {"thought": "<brief reasoning>", "action": { ... }}
 
@@ -39,6 +70,7 @@ action.kind is one of:
 - read   {"kind":"read","path":"file.py","offset":0,"limit":200}   view a file window. You MUST read a file before editing it.
 - grep   {"kind":"grep","pattern":"regex","path":"."}
 - edit   {"kind":"edit","path":"file.py","old_string":"<EXACT text to replace>","new_string":"<replacement>"}   old_string must match the file exactly.
+         To CREATE a new file: edit with old_string:"" and the full file content as new_string (the path must not exist yet).
 - shell  {"kind":"shell","argv":["python3","-c","print(1)"]}   argv LIST only — no shell string, no pipes/redirects.
 - finish {"kind":"finish","message":"<what you did>"}   when the task is complete.
 
@@ -108,7 +140,8 @@ class ModelPlane:
             # constrained decoding for the JSON turn protocol (Phase-0: 100% parseable).
             # A dialect role (search_replace) emits free fenced text, so no constraint.
             body["response_format"] = {"type": "json_schema",
-                                       "json_schema": {"name": "turn", "strict": True, "schema": TURN_SCHEMA}}
+                                       "json_schema": {"name": "turn", "strict": True,
+                                                       "schema": turn_schema_for(rc)}}
         req = urllib.request.Request(
             self.url + "/v1/chat/completions", data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"})
