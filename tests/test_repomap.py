@@ -18,9 +18,14 @@ Deterministic: no live model server required (run_task's ModelPlane is
 monkeypatched to a scripted stand-in, the same pattern
 test_rollback_resample.py uses). Run: python3 tests/test_repomap.py
 """
-import sys, tempfile
+import os, sys, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Redirect ALL var/ writes for this test process BEFORE any animal import
+# resolves config.VAR (candidates.sample_candidates creates a default-path
+# Ledger; without this each suite run leaks it into production var/ledger).
+os.environ["ANIMAL_HOME"] = tempfile.mkdtemp(prefix="animal-test-home-")
 
 from animal import repomap
 import animal.loop as loop

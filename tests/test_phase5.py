@@ -33,6 +33,12 @@ import os, sys, json, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Redirect ALL var/ writes (ledgers, learning.db defaults) for this whole test
+# process BEFORE any animal import resolves config.VAR -- a #460 audit found
+# each suite run depositing dozens of synthetic work-lane ledgers into the
+# PRODUCTION var/ledger, co-locating test artifacts with real evidence.
+os.environ["ANIMAL_HOME"] = tempfile.mkdtemp(prefix="animal-test-home-")
+
 from animal import config
 from animal import product_owner
 from animal.product_owner import ProductOwnerError
@@ -1079,6 +1085,266 @@ def test_learn_uses_the_same_calibration_db_and_role():
     cal.close()
     assert task_rate["n"] == 1, task_rate              # the verifier gate's row...
     assert action_rate["n"] == 1, action_rate          # ...and learn's ingest, SAME db, SAME role
+
+
+# --- Story #460: the auditor gate -- fresh DoD re-run + cross-family audit panel ---
+
+def _flipflop_check():
+    """A deterministically FLAKY DoD check: alternates pass/fail on every run
+    (flag file toggles). Sequence in a run_work run: negative-control run
+    (no flag -> touch, exit 1: genuinely red, non-vacuous), verify run
+    (flag -> rm, exit 0: PASS), audit re-run (no flag -> touch, exit 1: FAIL)
+    -- a verify-vs-audit mismatch by construction."""
+    return DoDCheck("flaky", ["bash", "-c",
+                    "test -f flag && { rm flag; exit 0; } || { touch flag; exit 1; }"],
+                    "exit_zero")
+
+
+def test_audit_rerun_mismatch_forces_needs_human_with_incident():
+    """AC: the audit gate re-runs every check in a FRESH sandbox; a
+    verify-vs-audit mismatch is unstable evidence -- harness_fault, forced
+    needs_human, typed audit_halt incident, and NO calibration charge in
+    either direction."""
+    from animal.calibration import Calibration
+    from animal.incidents import Incidents
+    repo = _repo()
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0,
+                "finished": True}   # model claims -- but the evidence is unstable
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("the flaky thing", dod=[_flipflop_check()])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r
+    assert r.get("audit_halt") is True and "mismatch" in r["reason"] and "flaky" in r["reason"], r
+    p = _verifier_events(r)[0]["payload"]
+    assert p["error_class"] == "harness_fault", p      # unstable evidence charges nobody
+    cal = Calibration(db_path=caldb)
+    rate = cal.rate("coder", "coder", "task_complete")
+    cal.close()
+    assert rate["n"] == 0, rate
+    inc = Incidents(db_path=caldb)
+    halts = [i for i in inc.active() if i["class"] == "audit_halt"]
+    inc.close()
+    assert len(halts) == 1 and "mismatch" in halts[0]["reality"], halts
+
+
+def _clean_done_setup():
+    """A repo + spec + claiming mock where the harness verdict is a clean,
+    stable 'done' -- the audit-panel tests then vary only the panel finding."""
+    repo = _repo("def add(a,b):\n    return a + b\n")   # already correct
+    spec = Spec("add must sum", dod=[DoDCheck(
+        "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero",
+        regression=True)])   # passes pre-work by design -- opt out of the negative-control
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "diff --git a/calc.py b/calc.py\n", "turns": 1, "changed": True,
+                "edits_landed": 1, "finished": True}
+    return repo, spec, fake_run_task
+
+
+def _run_with_audit_panel(panel_finding):
+    """Drive run_work(audit_panel=True) with panel.audit_review monkeypatched
+    to return `panel_finding` (worklane imports the module lazily, so patching
+    the module attribute is exactly what a live run would call)."""
+    import animal.panel as panel_mod
+    repo, spec, fake_run_task = _clean_done_setup()
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+    calls = {"n": 0}
+
+    def fake_audit_review(spec_, results_, run_diff_, url=None, rule="majority"):
+        calls["n"] += 1
+        return panel_finding
+
+    orig_task, orig_panel = worklane.run_task, panel_mod.audit_review
+    worklane.run_task = fake_run_task
+    panel_mod.audit_review = fake_audit_review
+    try:
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              audit_panel=True, calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig_task
+        panel_mod.audit_review = orig_panel
+    assert calls["n"] == 1, "audit_review must run exactly once"
+    return r, caldb
+
+
+def test_audit_panel_flag_forces_needs_human():
+    """AC: flagged=True overrides all_pass -- the panel constructed a failure
+    that passes every check but violates the story; reason names the condition."""
+    from animal.incidents import Incidents
+    r, caldb = _run_with_audit_panel({"panel_verdict": "unsound", "flagged": True,
+                                      "no_user_story": False,
+                                      "per_seat": {"mistral": "unsound"},
+                                      "reasons": {"mistral": "check only pins add(2,3)"}})
+    assert r["dod_all_pass"] is True, r                # the harness verdict WAS green...
+    assert r["final_state"] == "needs_human", r        # ...and the panel still halts it
+    assert r.get("audit_halt") is True and "flagged" in r["reason"], r
+    inc = Incidents(db_path=caldb)
+    halts = [i for i in inc.active() if i["class"] == "audit_halt"]
+    inc.close()
+    assert len(halts) == 1, halts
+
+
+def test_audit_panel_no_user_story_forces_needs_human():
+    """AC: no_user_story=True is equivalent to a hallucinated completion --
+    forced needs_human with the condition named."""
+    r, _ = _run_with_audit_panel({"panel_verdict": "sound", "flagged": False,
+                                  "no_user_story": True,
+                                  "per_seat": {"mistral": "sound"},
+                                  "reasons": {"mistral": "diff unrelated to story"}})
+    assert r["final_state"] == "needs_human", r
+    assert r.get("audit_halt") is True and "no_user_story" in r["reason"], r
+
+
+def test_audit_panel_clean_run_reaches_done_unchanged():
+    """AC regression: when the fresh re-run matches and the panel does not
+    flag, the task reaches 'done' exactly as before this story."""
+    r, _ = _run_with_audit_panel({"panel_verdict": "sound", "flagged": False,
+                                  "no_user_story": False,
+                                  "per_seat": {"mistral": "sound"}, "reasons": {}})
+    assert r["final_state"] == "done", r
+    assert "audit_halt" not in r, r
+
+
+def test_audit_panel_all_abstain_halts_not_passes():
+    """An audit panel whose every seat abstained/errored (verdict '?') COULD
+    NOT judge -- for an opt-in auditor gate that must halt, never silently
+    count as a pass."""
+    r, _ = _run_with_audit_panel({"panel_verdict": "?", "flagged": False,
+                                  "no_user_story": False,
+                                  "per_seat": {"mistral": "?", "qwen": "?", "gpt-oss": "?"},
+                                  "reasons": {}})
+    assert r["final_state"] == "needs_human", r
+    assert r.get("audit_halt") is True and "abstained" in r["reason"], r
+
+
+def test_run_work_from_story_defaults_audit_panel_on():
+    """Red-team fix (the #449 zero-call-site precedent): the model-authored
+    path must run the cross-family AUDIT panel by default, exactly as it
+    already defaults the premise panel -- otherwise Gate 3b never runs in any
+    production path and the shipped audit gate is single-actor only."""
+    import animal.panel as panel_mod
+    repo = _repo("def add(a,b):\n    return a + b\n")
+    calls = {"audit": 0}
+
+    def fake_chat(role, messages, url=None, timeout=600):
+        return json.dumps({"user_story": "add must sum", "intent": [], "out_of_scope": [],
+                           "dod": [{"name": "add-sums",
+                                    "argv": ["python3", "-c", "import calc; assert calc.add(2,3)==5"],
+                                    "comparator": "exit_zero", "regression": True}]})
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        return {"run_diff": "diff --git a/calc.py b/calc.py\n", "turns": 1, "changed": True,
+                "edits_landed": 1, "finished": True}
+
+    def fake_review(spec_, url=None, rule="majority"):   # Gate 0c (already default-on)
+        return {"panel_verdict": "sound", "flagged": False, "per_seat": {}, "reasons": {}}
+
+    def fake_audit(spec_, results_, run_diff_, url=None, rule="majority"):
+        calls["audit"] += 1
+        return {"panel_verdict": "sound", "flagged": False, "no_user_story": False,
+                "per_seat": {}, "reasons": {}}
+
+    orig = (product_owner._chat, worklane.run_task, panel_mod.review_spec, panel_mod.audit_review)
+    product_owner._chat = fake_chat
+    worklane.run_task = fake_run_task
+    panel_mod.review_spec = fake_review
+    panel_mod.audit_review = fake_audit
+    try:
+        r = run_work_from_story("add must sum", str(repo), approver=lambda k, s: "approve",
+                                max_turns=2,
+                                calibration_db=str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "l.db"),
+                                ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        product_owner._chat, worklane.run_task, panel_mod.review_spec, panel_mod.audit_review = orig
+    assert r["final_state"] == "done", r
+    assert calls["audit"] == 1, "Gate 3b must run BY DEFAULT on the model-authored path"
+
+
+def test_audit_rerun_covers_tester_pinned_files():
+    """Red-team fix: the auditor must re-establish ALL the evidence 'done'
+    rests on -- under tdd=True that includes the tester's pinned test file.
+    A stateful tester test (fails at RED, passes at GREEN, fails again at the
+    audit re-run) is a verify-vs-audit mismatch and must halt."""
+    from animal.incidents import Incidents
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    caldb = str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "learning.db")
+    # toggles: run 1 (RED) no flag -> touch, fail; run 2 (GREEN) flag -> rm,
+    # pass; run 3 (AUDIT) no flag -> touch, fail  => GREEN vs AUDIT mismatch
+    sneaky = ("import pathlib, sys\n"
+              "flag = pathlib.Path(__file__).parent / 'flag'\n"
+              "if flag.exists():\n"
+              "    flag.unlink()\n"
+              "else:\n"
+              "    flag.touch(); sys.exit(1)\n")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        if role == "tester":
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_toggle.py").write_text(sneaky)
+            return {"run_diff": "diff --git a/tests/test_toggle.py b/tests/test_toggle.py\n",
+                    "changed_paths": ["tests/test_toggle.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return a + b\n")
+        return {"run_diff": "diff --git a/calc.py b/calc.py\n", "changed_paths": ["calc.py"],
+                "turns": 2, "changed": True, "edits_landed": 1, "finished": True}
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2,
+                              tdd=True, calibration_db=caldb,
+                              ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r
+    assert r.get("audit_halt") is True and "test_toggle.py" in r["reason"], r
+    inc = Incidents(db_path=caldb)
+    halts = [i for i in inc.active() if i["class"] == "audit_halt"]
+    inc.close()
+    assert len(halts) == 1, halts
+
+
+def test_panel_audit_review_aggregates_flag_votes():
+    """Offline unit for panel.audit_review's own logic: _chat monkeypatched
+    per-seat (the test_phase3 substitution pattern). Two flag votes + one pass
+    -> flagged; no_user_story true on a majority of voting seats."""
+    import animal.panel as panel_mod
+    answers = iter([
+        json.dumps({"verdict": "flag", "no_user_story": True, "reason": "gameable"}),
+        json.dumps({"verdict": "flag", "no_user_story": True, "reason": "untraceable"}),
+        json.dumps({"verdict": "pass", "no_user_story": False, "reason": "fine"}),
+    ])
+
+    def fake_chat(model, messages, schema, max_tokens, url=None):
+        return next(answers)
+
+    spec = Spec("s", dod=[DoDCheck("c", ["python3", "-c", "print(1)"], "exit_zero", regression=True)])
+    orig = panel_mod._chat
+    panel_mod._chat = fake_chat
+    try:
+        out = panel_mod.audit_review(spec, [{"name": "c", "passed": True}], "diff --git a/x b/x\n")
+    finally:
+        panel_mod._chat = orig
+    assert out["flagged"] is True, out
+    assert out["no_user_story"] is True, out
+    assert list(out["per_seat"].values()).count("unsound") == 2, out
 
 
 if __name__ == "__main__":

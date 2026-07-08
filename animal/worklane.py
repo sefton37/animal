@@ -309,13 +309,21 @@ def run_work_from_story(user_story: str, repo: str, approver=None, po_role: str 
     # panel (Gate 0c, built for exactly this gameable-check class) runs BY DEFAULT on a
     # model-authored spec -- the caller can still override premise_panel explicitly.
     kw.setdefault("premise_panel", True)
+    # Story #460 red-team fix (the #449 zero-call-site precedent, applied to
+    # Gate 3b exactly as it was to Gate 0c above): a model-authored spec gets
+    # the cross-family AUDIT panel by default too -- without this, the story's
+    # "cross-family red-team before done" never ran in any production path,
+    # and the shipped audit gate was single-actor only. The caller can still
+    # override audit_panel explicitly.
+    kw.setdefault("audit_panel", True)
     return run_work(spec, repo, approver=approver, **kw)
 
 
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
              ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False,
              learn: bool = False, include_repo_map: bool = True, tdd: bool = False,
-             tester_role: str = "tester", calibration_db=None) -> dict:
+             tester_role: str = "tester", calibration_db=None,
+             audit_panel: bool = False) -> dict:
     L = Ledger(ledger_dir=ledger_dir)
     sb = Sandbox()
     task = Task(spec)
@@ -430,6 +438,35 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
                                   "tester_artifact_modified": tester_modified,
                                   "tester_test_pass": tester_test_pass} if tester_pins else {})})
 
+    # Story #460 Gate 3a: the AUDIT RE-RUN -- distrust the verify step's own
+    # results object. Every spec.dod check is re-run in a FRESH Sandbox()
+    # instance and the pass/fail pattern compared check-by-check. A mismatch
+    # means the evidence itself is unstable (a flaky check, hidden state, or a
+    # sandbox fault) -- that is a harness_fault, not a model verdict, and no
+    # 'done' may rest on it: the run is forced to needs_human below, and the
+    # verifier gate's calibration charge is excluded via the same taxonomy.
+    # Caveat, documented not hidden: for nondeterministic=True checks (N=3
+    # all-must-pass inside run_check) the comparison is between two aggregate
+    # verdicts, so a genuinely flaky check can probabilistically agree across
+    # both runs (missed) or disagree (false halt -- errs safe). The detector's
+    # contract is idempotent checks; nondeterministic ones get N=3 rigor but
+    # only probabilistic mismatch coverage.
+    audit_sb = Sandbox()
+    audit_results = [run_check(c, audit_sb, repo) for c in spec.dod]
+    audit_mismatch = [a["name"] for a, b in zip(results, audit_results)
+                      if a["passed"] != b["passed"]]
+    # Red-team fix: the auditor must re-establish ALL the evidence 'done'
+    # rests on -- under tdd=True that includes the tester's pinned test
+    # file(s), not only spec.dod. Same fresh sandbox, same mismatch semantics.
+    audit_tester_results = ([_run_test_file(audit_sb, repo, p) for p in tester_pins]
+                            if tester_pins else [])
+    audit_mismatch += [a["path"] for a, b in zip(tester_test_results, audit_tester_results)
+                       if a["passed"] != b["passed"]]
+    L.append(EventType.GATE, {"gate": "audit_rerun", "mismatch": audit_mismatch,
+                              "results": [{"name": r["name"], "passed": r["passed"]} for r in audit_results],
+                              **({"tester_results": audit_tester_results} if audit_tester_results else {}),
+                              **({"error_class": ErrorClass.HARNESS_FAULT.value} if audit_mismatch else {})})
+
     # Story #459: the VERIFIER gate -- claimed-vs-verified, recorded as DATA.
     # claimed_done is the model's own completion claim (it called finish);
     # verified_true is that claim AND'd with the harness verdict that actually
@@ -459,7 +496,13 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
     env_fault = any((not r["passed"]) and r.get("exit_code") in (126, 127) for r in results)
     tester_artifact_fault = (bool(tester_pins) and dod_pass
                              and not tester_modified and not tester_test_pass)
-    if not claimed_done or verified_true:
+    if audit_mismatch:
+        # Story #460: the audit re-run disagreed with the verify run -- the
+        # evidence itself is unstable, so NO verdict about the model's claim
+        # (true OR false) may rest on it; harness_fault is excluded from
+        # calibration, in either direction.
+        verifier_error = ErrorClass.HARNESS_FAULT.value
+    elif not claimed_done or verified_true:
         verifier_error = ErrorClass.NONE.value
     elif env_fault:
         verifier_error = ErrorClass.ENV_MISMATCH.value
@@ -497,7 +540,61 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
                               "calibration_recorded": calibration_recorded,
                               **({"calibration_error": calibration_error} if calibration_error else {})})
 
-    task.transition("done" if all_pass else "needs_human"); traj.append(task.state)
+    # Story #460 Gate 3b: the cross-family AUDIT PANEL (opt-in) -- three
+    # distinct-lineage seats each attempt the adversarial construction ("a
+    # failure that passes every check but violates the user story") and judge
+    # story-traceability of the diff. Skipped when the audit re-run already
+    # found unstable evidence: the run is halting anyway, and three model
+    # calls spent judging results we already distrust prove nothing.
+    # Runs only when there is a green verdict to distrust: a run already
+    # heading to needs_human gains nothing from three model calls, and a
+    # mismatch already invalidated the evidence the panel would judge.
+    audit_finding = None
+    if audit_panel and all_pass and not audit_mismatch:
+        from . import panel as _panel
+        audit_finding = _panel.audit_review(spec, results, build.get("run_diff", ""))
+        L.append(EventType.GATE, {"gate": "audit_panel",
+                                  "verdict": audit_finding["panel_verdict"],
+                                  "flagged": audit_finding["flagged"],
+                                  "no_user_story": audit_finding["no_user_story"],
+                                  "per_seat": audit_finding["per_seat"],
+                                  "reasons": audit_finding["reasons"]})
+
+    # Story #460: the audit HALT -- either audit condition overrides all_pass
+    # and forces needs_human; the reason names exactly which condition fired.
+    # The halt is recorded as a typed incident in the learning plane's
+    # founding-incident ledger, crash-proofed like the calibration write (an
+    # incident-store failure is data in the ledger, never control flow).
+    audit_halt = None
+    if audit_mismatch:
+        audit_halt = ("audit re-run mismatch (harness_fault): checks changed verdict between the "
+                      f"verify run and a fresh sandbox: {audit_mismatch}")
+    elif audit_finding is not None and audit_finding["panel_verdict"] == "?":
+        # Every seat abstained or errored: the audit COULD NOT RUN. For an
+        # opt-in auditor gate, "no audit happened" must never silently equal
+        # "audit passed" -- the caller asked for this gate; done is not
+        # granted without it.
+        audit_halt = "audit panel: all seats abstained/unavailable -- the audit could not run"
+    elif audit_finding is not None and (audit_finding["flagged"] or audit_finding["no_user_story"]):
+        parts = []
+        if audit_finding["no_user_story"]:
+            parts.append("no_user_story: the diff is not traceable to the user story")
+        if audit_finding["flagged"]:
+            parts.append("flagged: a constructed failure passes every DoD check but violates the user story")
+        audit_halt = "audit panel: " + "; ".join(parts)
+    if audit_halt:
+        try:
+            from .incidents import Incidents
+            inc = Incidents(db_path=calibration_db)
+            inc.add(klass="audit_halt",
+                    claim=f"spec {spec.id} reached verify with all_pass={all_pass}",
+                    reality=audit_halt, detection="phase5_audit_gate")
+            inc.close()
+        except Exception as e:               # store unavailable -- record, don't die
+            L.append(EventType.GATE, {"gate": "audit_incident_write_failed",
+                                      "error": f"{type(e).__name__}: {e}"})
+
+    task.transition("done" if (all_pass and not audit_halt) else "needs_human"); traj.append(task.state)
 
     # Learning plane (opt-in): learn from the VERIFIED outcome of this run — record
     # calibration from the ledger, and upsert each passed DoD check as a lesson
@@ -519,7 +616,10 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
         paths = [g["ref"] for g in spec.groundings if g.get("exists")]
         n_les = 0
         for c, r in zip(spec.dod, results):
-            if r["passed"]:
+            # Story #460: a check whose verdict flipped between verify and the
+            # fresh audit re-run is unstable evidence -- nothing may be
+            # LEARNED from it as verified-good
+            if r["passed"] and r["name"] not in audit_mismatch:
                 les.upsert(f"{spec.id}:{c.name}", spec.user_story, paths=paths, check=c, verified_good=True)
                 n_les += 1
         les.close()
@@ -527,6 +627,8 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
 
     summary = _finish(L, task, traj, {
         "approved": True, "dod_all_pass": dod_pass,
+        # Story #460: present only when an audit condition forced needs_human
+        **({"reason": audit_halt, "audit_halt": True} if audit_halt else {}),
         "dod": [{"name": r["name"], "passed": r["passed"]} for r in results],
         "build_changed": build.get("changed"), "build_turns": build.get("turns"),
         "edits_landed": build.get("edits_landed"), "sandbox_mode": sb.mode,

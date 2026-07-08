@@ -3,9 +3,14 @@ machine (capability-follows-state, human-gated). Deterministic — no model need
 (the live approve path is demonstrated separately; see phase2/README.md).
 Run: `python3 tests/test_phase2.py` or under pytest.
 """
-import sys, tempfile
+import os, sys, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Redirect ALL var/ writes for this test process BEFORE any animal import
+# resolves config.VAR (a #460 audit found suite runs depositing synthetic
+# work-lane ledgers into the PRODUCTION var/ledger).
+os.environ["ANIMAL_HOME"] = tempfile.mkdtemp(prefix="animal-test-home-")
 
 from animal.spec import Spec, DoDCheck, SpecError, SpecState
 from animal.dod import validate_check, run_check
