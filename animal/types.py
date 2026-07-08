@@ -44,6 +44,7 @@ class ErrorClass(str, Enum):
     SANDBOX_DENIED = "sandbox_denied"            # action hit the sandbox wall (-> escalation)
     INVARIANT_VIOLATION = "invariant_violation"  # read-before-edit / staleness / out-of-grant
     FLAKE_RETRY_PASSED = "flake_retry_passed"
+    LINT_REJECTED = "lint_rejected"               # computed new_content fails the syntax-lint gate (rejected before write)
 
 
 # --- Actions: what a model may propose. Structured, never a shell string. ---

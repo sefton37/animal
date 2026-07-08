@@ -27,7 +27,18 @@ def _dispatch(action, ws: Workspace, sb: Sandbox) -> Envelope:
         r = sb.run(["grep", "-rn", "-e", action.pattern, action.path], ws.repo)
         return Envelope("grep", r["exit_code"] in (0, 1), computed=r)  # grep exit 1 = no match (ok)
     if isinstance(action, ShellAction):
+        # a ShellAction writes to the workspace directly (no edit() call) -- the
+        # lint gate belongs to the whole edit pipeline, so post-hoc-lint any
+        # path the command touched and block a syntax-breaking result the same
+        # way edit() blocks one, before it's fed back to the model as fact.
+        pre = ws.snapshot()
         r = sb.run(action.argv, ws.repo)
+        post = ws.snapshot()
+        changed = ws.changed_paths(pre, post)
+        lint_msg = ws.lint_gate_paths(pre, changed) if changed else None
+        if lint_msg is not None:
+            return Envelope("shell", False, ErrorClass.LINT_REJECTED.value,
+                            computed=r, note=f"lint rejected before write: {lint_msg}")
         return Envelope("shell", r["exit_code"] == 0, computed=r)
     if isinstance(action, FinishAction):
         return Envelope("finish", True, note=action.message)

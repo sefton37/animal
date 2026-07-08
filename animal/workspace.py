@@ -17,6 +17,7 @@ import subprocess, hashlib, difflib, os
 from pathlib import Path
 from .types import Envelope, ErrorClass
 from . import config
+from . import editlint
 
 
 def _sha(text: str) -> str:
@@ -60,6 +61,46 @@ class Workspace:
         """Best-effort revert of tracked files to a snapshot (edit-retry recovery)."""
         self._git("read-tree", tree)
         return self._git("checkout-index", "-a", "-f").returncode == 0
+
+    def changed_paths(self, tree_a: str, tree_b: str) -> list[str]:
+        """Names of paths that differ (added/modified/deleted) between two
+        shadow-git snapshots."""
+        r = self._git("diff", "--name-only", tree_a, tree_b)
+        return [l for l in r.stdout.splitlines() if l]
+
+    def blob_at(self, tree: str, path: str) -> str | None:
+        """path's content at a shadow-git snapshot, or None if it didn't exist
+        there (i.e. path was newly created since that snapshot)."""
+        r = self._git("show", f"{tree}:{path}")
+        return r.stdout if r.returncode == 0 else None
+
+    # --- post-hoc lint gate: for writes that don't go through edit() ---
+    def lint_gate_paths(self, pre_tree: str, paths: list[str]) -> str | None:
+        """Applies the same lint gate edit() enforces, but to files a non-edit
+        action (e.g. a ShellAction's argv) may have written directly to disk --
+        the lint gate belongs to the whole edit pipeline, not to one action
+        kind. Any changed path whose CURRENT on-disk content fails the lint is
+        blocked from landing: reverted to its pre_tree content, or deleted if
+        it did not exist at pre_tree (a newly-created broken file). Returns the
+        first rejection message, or None if every changed path is clean."""
+        rejection = None
+        for path in paths:
+            p = self._resolve(path)
+            if p is None or not p.is_file():
+                continue
+            content = p.read_text(errors="replace")
+            msg = editlint.lint(path, content)
+            if msg is None:
+                continue
+            if rejection is None:
+                rejection = f"{path}: {msg}"
+            prior = self.blob_at(pre_tree, path)
+            if prior is None:
+                p.unlink()                  # didn't exist before the write -- remove it
+            else:
+                p.write_text(prior)         # existed before -- put its content back
+            self._reads.pop(str(p), None)   # any prior read-state is now stale
+        return rejection
 
     # --- reads (windowed) + read-before-edit tracking ---
     def read(self, path: str, offset: int = 0, limit: int = 200) -> Envelope:
@@ -111,6 +152,12 @@ class Workspace:
             # nothing actually changed -> non-persistence, regardless of what was claimed
             return Envelope("edit", False, ErrorClass.NON_PERSISTENCE.value,
                             note="edit produced no change (empty diff)")
+        # lint gate: run on the COMPUTED new_content BEFORE any write reaches disk.
+        # Advisory-only for extensions the linter doesn't recognize (never rejects).
+        lint_msg = editlint.lint(path, new_content)
+        if lint_msg is not None:
+            return Envelope("edit", False, ErrorClass.LINT_REJECTED.value,
+                            note=f"lint rejected before write: {lint_msg}")
         p.write_text(new_content)
         after = p.read_text(errors="replace")               # read back (fsync-then-read)
         self._reads[str(p)] = _sha(after)                   # keep read-state current
