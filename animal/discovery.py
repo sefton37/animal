@@ -29,11 +29,22 @@ yielded nothing" from "the session died before it could" (red-team major: an
 offline model server used to exit 0 with {"stories": []}, masking total
 failure as an empty outcome).
 
-Deliberately NOT here (later M4 stories): clustering raw stories into epics
-and persisting them (#463), drafting a Gate-0-valid Spec from a raw story
-(#464), and the ambiguity-resolution pass (#465). run_discovery returns RAW
-stories -- title / narrative / notes -- shaped enough to hand onward, nothing
-more.
+Story #464 lives here too: draft_spec bridges Act 1 to Act 2 -- a raw story
+dict becomes a Gate-0-valid Spec by COMPOSING the existing #457 product-owner
+machinery (author_spec: schema-constrained model call + structural round-trip
++ per-check authoring validation, with its own concrete-reason retries) with
+a draft-time GROUNDING loop: a draft whose references don't resolve is
+re-prompted with the exact misses, bounded, instead of sailing on to fail at
+run_work's Gate 0a later. No gate logic is duplicated -- ground() and
+validate_spec() are the same functions the work lane runs. NAMED DEVIATION
+from the AC's letter (authored pre-M3): the model channel in this machinery
+is product_owner._chat (JSON-schema-constrained spec authoring), not
+ModelPlane.call's turn protocol -- the substance (architect-seat model,
+constrained draft object, Spec.from_dict validation) is identical.
+
+Deliberately NOT here (later M4 stories): the ambiguity-resolution pass
+(#465). run_discovery returns RAW stories -- title / narrative / notes --
+shaped enough to hand onward; #463's clustering persists them.
 """
 from __future__ import annotations
 import json
@@ -41,6 +52,10 @@ from . import config
 from .ledger import Ledger
 from .model import ModelPlane, ModelError
 from .types import EventType
+from .spec import Spec
+from .grounding import ground
+from .dod import validate_spec
+from .sandbox import Sandbox
 
 # The event-type string every dialogue move lands under (model question, maker
 # answer, proposed story, finish, and every fault) -- discovery is auditable
@@ -68,6 +83,73 @@ story separately. Finish when the topic is decomposed."""
 class MakerAbsent(Exception):
     """Raised by a channel when there is no maker to answer (EOF, dead pipe).
     The harness halts the session on this -- it never fabricates an answer."""
+
+
+def _story_text(raw_story: dict) -> str:
+    """Render a #462 raw story (title/narrative/notes) into the plain-language
+    user story author_spec expects. A story with no NARRATIVE is not
+    draftable (audit F6: title-only used to render as 'title: ' and burn a
+    real model call) -- returns "" so draft_spec can refuse it."""
+    title = (raw_story.get("title") or "").strip()
+    narrative = (raw_story.get("narrative") or "").strip()
+    notes = (raw_story.get("notes") or "").strip()
+    if not narrative:
+        return ""
+    parts = [f"{title}: {narrative}" if title else narrative]
+    if notes:
+        parts.append(f"notes: {notes}")
+    return "\n\n".join(parts)
+
+
+def draft_spec(raw_story: dict, repo: str, *, channel=None, max_retries: int = 3,
+               url: str | None = None, timeout: int = 600) -> Spec:
+    """Story #464: raw story dict -> a Spec that is Gate-0-valid AGAINST THE
+    REPO at draft time. Composes, never duplicates:
+
+      author_spec (#457)  -- the schema-constrained architect-seat draft, with
+                             its own structural + per-check validation retries
+      ground (Gate 0a)    -- every referenced file/symbol must resolve
+      validate_spec (0b)  -- the same authoring validation run_work runs
+
+    A draft that grounds badly is re-prompted with the CONCRETE misses,
+    bounded to max_retries outer attempts; the residual failure surfaces as
+    ProductOwnerError (author_spec's own error type), never an infinite loop
+    and never a silently-ungrounded spec handed onward. Worst-case model
+    calls = max_retries x author_spec's own inner attempts (3 x 3 = 9 by
+    default -- audit F2: hard-bounded, but name the multiplication; a live
+    architect-seat call can take minutes). Rejection feedback ACCUMULATES
+    across outer attempts (audit F3: rebuilding it each time hid earlier
+    misses, inviting fix-B-reintroduce-A oscillation the model could not
+    see). channel is keyword-only and reserved for a future maker-in-the-loop
+    refinement pass (#465); unused here."""
+    from .product_owner import author_spec, ProductOwnerError
+    sb = Sandbox()
+    base = _story_text(raw_story)
+    if not base:
+        raise ValueError("raw_story has no narrative to draft from")
+    feedback = ""
+    last_reason = "no attempt made"
+    for _ in range(max_retries):
+        spec = author_spec(base + feedback, repo, url=url, timeout=timeout)
+        g = ground(spec, repo)
+        v = validate_spec(spec, sb, repo)
+        if g["ok"] and v["ok"]:
+            Spec.from_dict(spec.to_dict())     # round-trip invariant, cheap final proof
+            return spec
+        reasons = []
+        if not g["ok"]:
+            reasons.append(f"unresolved references (files that do not exist in the repo): {g['misses']}")
+        if not v["ok"]:
+            bad = [c for c in v["checks"] if not c["ok"]] or ["no DoD checks emitted"]
+            reasons.append(f"authoring validation failed: {bad}")
+        last_reason = "; ".join(reasons)
+        feedback += ("\n\nA PRIOR DRAFT WAS REJECTED at Gate 0: " + last_reason +
+                     ". Every file your DoD references must already exist in the repo "
+                     "(use python3 -c behavior checks against real modules, or set "
+                     "expected_new true on a check naming a file the WORK ITSELF will create).")
+    raise ProductOwnerError(
+        f"draft_spec: no Gate-0-valid spec for {base[:80]!r} in {max_retries} attempts; "
+        f"last failure: {last_reason}")
 
 
 def _tui_channel(question: str) -> str:

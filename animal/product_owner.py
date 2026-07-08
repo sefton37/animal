@@ -42,6 +42,12 @@ _SPEC_SCHEMA = {
                     "argv": {"type": "array", "items": {"type": "string"}},
                     "comparator": {"type": "string", "enum": [c.value for c in Comparator]},
                     "expected": {"type": "string"},
+                    # #464 audit F1: without this the strict decoder could
+                    # NEVER emit the flag, so a TDD-shaped story (a DoD check
+                    # naming a test file the work itself will create) could
+                    # not draft through the front door, and draft_spec's
+                    # retry advice was unfollowable.
+                    "expected_new": {"type": "boolean"},
                 },
             },
         },
@@ -73,6 +79,8 @@ _SYS = ("Product owner. Turn the user story into JSON {user_story, intent, out_o
         "implemented. A check's argv[0] MUST be a real, invokable program (e.g. 'python3', 'grep') "
         "-- NEVER the name of a function or feature as if it were a shell command. Example of a GOOD "
         "check: argv ['python3','-c','import calc; assert calc.add(2,3)==5'], comparator exit_zero. "
+        "If a check must reference a file the WORK ITSELF will create (e.g. a new tests/test_x.py), "
+        "set expected_new true on that check; otherwise every referenced file must already exist. "
         "Never emit a check that already passes today (e.g. 'print(1)', 'true') -- it would be "
         "rejected. Keep any reasoning brief. Output ONLY the JSON object "
         "{user_story, intent, out_of_scope, dod}, no other prose.")
