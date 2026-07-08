@@ -48,12 +48,31 @@ CONSTRUCTION.md's 'detect pathology' step:
 Both are harness-owned: neither reads the model's free-form 'thought' text to
 decide anything (Law 1 -- the model never gets a vote on whether it 'is'
 repeating or on what gets collapsed).
+
+Repo map (Story #449): an opt-in `include_repo_map` flag on run_task appends
+animal.repomap.build_repo_map's compact file/symbol listing to the system
+prompt, so a coder can REQUEST the right file directly instead of groping by
+trial-and-error grep/read -- see animal/repomap.py's own docstring for the
+tree-sitter-vs-stdlib decision. run_task's OWN default stays OFF (so a caller
+that inspects prompt content byte-for-byte, e.g. this suite's rollback/
+loop-hygiene tests, sees no change) -- but that default is not the last word:
+a first attempt at this story left every PRODUCTION call site -- a maker's actual
+invocation (animal/cli.py's `run`
+command, animal/worklane.py's gated build step, animal/candidates.py's
+patch-farm) at the untouched default, so no maker's actual invocation ever saw
+the map (red-team rejection). The fix wires each real call site to pass
+include_repo_map=True by default: worklane.run_work and
+candidates.sample_candidates both default their own `include_repo_map` kwarg
+to True and forward it here; cli.py's `run` subcommand adds a `--no-repo-map`
+opt-out flag (default: included). Only run_task's bare signature default
+remains False, purely to keep this module directly testable without the flag.
 """
 from __future__ import annotations
 import json
 from .ledger import Ledger
 from .workspace import Workspace
 from .model import ModelPlane, ModelError, SYSTEM_PROMPT
+from .repomap import build_repo_map
 from .sandbox import Sandbox
 from .types import (EventType, ErrorClass, Envelope, action_from_dict, ActionParseError,
                     ReadAction, GrepAction, EditAction, ShellAction, FinishAction)
@@ -181,7 +200,7 @@ def _collapse_observations(messages: list[dict], keep: int = 5) -> list[dict]:
 
 def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | None = None,
              ledger_dir=None, max_turns: int | None = None, ledger: Ledger | None = None,
-             temperature: float | None = None) -> dict:
+             temperature: float | None = None, include_repo_map: bool = False) -> dict:
     L = ledger or Ledger(ledger_dir=ledger_dir)   # work lane shares one ledger across the chain
     ws = Workspace(repo, L.session_id)
     mp = ModelPlane()
@@ -192,7 +211,13 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
              {"task": task, "repo": str(ws.repo), "role": role, "sandbox_mode": sb.mode,
               "net_off": sb.mode == "full"})
     t0 = ws.snapshot()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+    # Repo map (Story #449): opt-in, default OFF -- appended to the system
+    # prompt so it's part of the FIRST prompt the model sees, letting it
+    # request the right file directly instead of groping blind.
+    system_prompt = SYSTEM_PROMPT
+    if include_repo_map:
+        system_prompt = system_prompt + "\n\n" + build_repo_map(str(ws.repo))
+    messages = [{"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Task: {task}\n\nBegin. Emit one action."}]
 
     edits_landed, finished = 0, False

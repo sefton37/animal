@@ -28,14 +28,19 @@ def _copy_repo(src) -> Path:
     return dst
 
 
-def sample_candidates(task: str, repo, k: int = 5, coder_role: str = "coder", max_turns: int = 6) -> list[dict]:
-    """k independent coder attempts on k fresh copies, at spread temperatures."""
+def sample_candidates(task: str, repo, k: int = 5, coder_role: str = "coder", max_turns: int = 6,
+                       include_repo_map: bool = True) -> list[dict]:
+    """k independent coder attempts on k fresh copies, at spread temperatures.
+    Story #449 fix: each attempt IS a real coder session (the patch-farm's whole
+    point is more real coding attempts) -- default include_repo_map ON so every
+    sampled attempt sees the repo map, not just a test-only opt-in."""
     temps = (DEFAULT_TEMPS * (k // len(DEFAULT_TEMPS) + 1))[:k]
     out = []
     for i in range(k):
         wd = _copy_repo(repo)
         s = run_task("Fix the bug so the task is satisfied:\n" + task, str(wd),
-                     role=coder_role, checks=[], temperature=temps[i], max_turns=max_turns)
+                     role=coder_role, checks=[], temperature=temps[i], max_turns=max_turns,
+                     include_repo_map=include_repo_map)
         out.append({"i": i, "temp": temps[i], "dir": str(wd),
                     "diff": s.get("run_diff", ""), "changed": bool(s.get("changed"))})
     return out

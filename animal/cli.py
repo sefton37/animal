@@ -16,6 +16,10 @@ def main(argv=None):
     r.add_argument("--check", action="append", default=[],
                    help="a check command (shlex-split); the harness runs it and records the real exit code")
     r.add_argument("--max-turns", type=int, default=None)
+    r.add_argument("--no-repo-map", dest="repo_map", action="store_false", default=True,
+                   help="omit the compact repo file/symbol map from the system prompt "
+                        "(Story #449: included by default so the coder can request the right "
+                        "file directly instead of groping by trial-and-error grep/read)")
     sub.add_parser("learn", help="inspect the learning plane (calibration, lessons, incidents, health) — read-only")
     b = sub.add_parser("backlog", help="read/write the local product backlog (epics + stories) — #452 CRUD")
     bsub = b.add_subparsers(dest="backlog_cmd", required=True)
@@ -37,7 +41,8 @@ def main(argv=None):
 
     if args.cmd == "run":
         checks = [{"name": f"check{i}", "argv": shlex.split(c)} for i, c in enumerate(args.check)]
-        s = run_task(args.task, args.repo, role=args.role, checks=checks, max_turns=args.max_turns)
+        s = run_task(args.task, args.repo, role=args.role, checks=checks, max_turns=args.max_turns,
+                     include_repo_map=args.repo_map)
         printable = {k: v for k, v in s.items() if k != "run_diff"}
         print(json.dumps(printable, indent=2))
         print("\n--- computed run diff ---\n" + (s["run_diff"] or "(no changes on disk)"))

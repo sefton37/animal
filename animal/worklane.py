@@ -28,7 +28,7 @@ def _finish(L, task, traj, extra) -> dict:
 
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
              ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False,
-             learn: bool = False) -> dict:
+             learn: bool = False, include_repo_map: bool = True) -> dict:
     L = Ledger(ledger_dir=ledger_dir)
     sb = Sandbox()
     task = Task(spec)
@@ -79,8 +79,13 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
     task.transition("building"); traj.append(task.state)
     assert task.can_write(), "invariant: writes only while building"
     prompt = spec.user_story + ("\n\nIntent:\n- " + "\n- ".join(spec.intent) if spec.intent else "")
+    # Story #449 fix: this IS the harness's real coder build step (a red-team
+    # rejection of the prior attempt found zero real call sites for
+    # include_repo_map) -- default it ON here so the gated work lane's actual
+    # coding session sees the repo map without any extra opt-in from a caller.
     build = run_task("Make this specification true:\n" + prompt, repo,
-                     role=implementer_role, checks=[], ledger=L, max_turns=max_turns)
+                     role=implementer_role, checks=[], ledger=L, max_turns=max_turns,
+                     include_repo_map=include_repo_map)
 
     # Verify — the HARNESS runs the DoD; real verdicts, not the model's claim
     task.transition("verifying"); traj.append(task.state)
