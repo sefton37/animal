@@ -203,6 +203,41 @@ class Workspace:
         if p is None:
             return Envelope("edit", False, ErrorClass.INVARIANT_VIOLATION.value,
                             note=f"path escapes workspace: {path}")
+        # Story #492 -- the CREATE form: old_string == "" on a path that does
+        # not exist yet. Found by the M3 LIVE exit-proof run: the live tester
+        # emitted a perfect new test file exactly this way on its first turn
+        # and the kernel refused it (edit could only modify), so the model
+        # burned all its turns against a missing capability and the chain
+        # (correctly) refused a vacuous red. Creation faces the same gates a
+        # rewrite does -- containment (resolved above), the lint gate BEFORE
+        # any write, non-persistence (an empty file is no artifact) -- and the
+        # created content becomes this session's read-state, so a follow-up
+        # edit anchors against what was actually written. The read-before-edit
+        # and staleness invariants for EXISTING files are untouched: an empty
+        # old_string on an existing file is refused outright, never treated
+        # as an anchor.
+        if old_string == "":
+            if p.exists():
+                return Envelope("edit", False, ErrorClass.MODEL_CLAIM_FALSE.value,
+                                note="empty old_string is the CREATE form, but the file already "
+                                     "exists -- read it and anchor the edit on real content")
+            if new_string == "":
+                return Envelope("edit", False, ErrorClass.NON_PERSISTENCE.value,
+                                note="refusing to create an empty file (no artifact)")
+            lint_msg = editlint.lint(path, new_string)
+            if lint_msg is not None:
+                return Envelope("edit", False, ErrorClass.LINT_REJECTED.value,
+                                note=f"lint rejected before write: {lint_msg}")
+            p.parent.mkdir(parents=True, exist_ok=True)   # p is already contained; so is its parent
+            p.write_text(new_string)
+            after = p.read_text(errors="replace")          # read back (fsync-then-read)
+            self._reads[str(p)] = _sha(after)
+            diff = "".join(difflib.unified_diff(
+                [], after.splitlines(keepends=True), fromfile="/dev/null", tofile=f"b/{path}"))
+            added = sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
+            return Envelope("edit", True, computed={
+                "path": path, "before_hash": None, "after_hash": _sha(after),
+                "diff": diff, "added": added, "removed": 0, "match_strategy": "create"})
         if not p.is_file():
             return Envelope("edit", False, ErrorClass.HARNESS_FAULT.value, note=f"no such file: {path}")
         content = p.read_text(errors="replace")

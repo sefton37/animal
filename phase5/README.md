@@ -27,6 +27,23 @@ sequence `grounding → dod_authoring → (premise_panel) → tester_scope →
 tester_artifact → red_confirmed → dod_verify → audit_rerun → verifier →
 audit_panel` in ledger order.
 
+**1b. LIVE exit proof (2026-07-08, no mocks)** — the same `run_tdd_work` call
+against the real llama-swap models on a toy broken-`calc.add` repo reached
+`done` in 143 s: the product-owner authored the spec live, the tester CREATED
+`tests/test_calc.py` with four module-level asserts (harness-run: exit 1, a
+genuine red), the coder fixed the bug in 4 turns, GREEN passed with the
+sha-pinned artifact unmodified, the fresh-sandbox audit re-run matched, the
+verifier recorded a verified-TRUE claim, and the live cross-family audit
+panel returned sound/traceable. All ten gates present in the live ledger with
+those verdicts. It took three live iterations to get here, and the first two
+FAILED SAFE — each stopped by the vacuous-red gate, each exposing a real
+capability gap the mocked tests could not see: (1) the kernel's edit action
+could not CREATE a file (the tester's first, correct instinct) → the #492
+create form; (2) the tester wrote pytest-style `def test_...` that runs clean
+as a script → the prompt now demands module-level asserts. The gates never
+let a non-test through; the chain converged by fixing the *capability*, never
+by weakening a gate.
+
 **2. Every gate earns its place adversarially.** Each story shipped only after
 a Gate-3 red-team (2–3 auditors + independent refute-verification of every
 finding) demonstrated real failures — fixed, and almost all now regression

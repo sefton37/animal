@@ -101,6 +101,7 @@ action.kind is one of:
 - read   {"kind":"read","path":"file.py","offset":0,"limit":200}   view a file window. You MUST read a file before editing it.
 - grep   {"kind":"grep","pattern":"regex","path":"."}
 - edit   {"kind":"edit","path":"tests/test_x.py","old_string":"<EXACT text to replace>","new_string":"<replacement>"}   old_string must match the file exactly.
+         To CREATE a new test file: edit with old_string:"" and the full file content as new_string (the path must not exist yet).
 - shell  {"kind":"shell","argv":["python3","-c","print(1)"]}   argv LIST only — no shell string, no pipes/redirects.
 - finish {"kind":"finish","message":"<what you did>"}   when the test is written.
 
@@ -109,7 +110,16 @@ tests/ (a path whose name starts with "test_" and ends in ".py") that captures t
 specification's Definition of Done and genuinely FAILS against the CURRENT,
 not-yet-implemented code -- a real red, never a vacuous one (a test that already
 passes proves nothing). Do NOT edit any non-test file; implementing the feature is
-a later step, not yours. Finish once the test file is written."""
+a later step, not yours.
+
+IMPORTANT: the harness executes your file as a PLAIN SCRIPT -- `python3
+tests/test_x.py` -- NOT via pytest. A `def test_...():` that is never called runs
+clean and will be REJECTED as vacuous. Use module-level asserts, e.g.:
+    import calc
+    assert calc.add(2, 3) == 5, "add must sum"
+or call every test function explicitly at the bottom of the file.
+
+Finish once the test file is written."""
 
 
 def _is_test_path(path: str) -> bool:

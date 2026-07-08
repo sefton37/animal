@@ -96,6 +96,49 @@ def test_workspace_containment():
     assert not e.ok and e.error_class == ErrorClass.INVARIANT_VIOLATION.value
 
 
+# --- Story #492: the edit CREATE form (live-tester blocker) ---
+
+def test_edit_create_new_file():
+    """old_string == "" on a nonexistent path CREATES the file -- found by the
+    M3 live exit-proof: the live tester emitted exactly this on turn 1 and the
+    kernel refused it, so the model burned every turn against a missing
+    capability. Creation seeds read-state, so a follow-up edit anchors without
+    an explicit read."""
+    repo, ws = _ws()
+    body = "import calc\nassert calc.add(2, 3) == 5\n"
+    e = ws.edit("tests/test_new.py", "", body)
+    assert e.ok and e.computed["match_strategy"] == "create", e.to_dict()
+    assert (repo / "tests" / "test_new.py").read_text() == body
+    # created content IS this session's read-state: follow-up edit just works
+    e2 = ws.edit("tests/test_new.py", "add(2, 3) == 5", "add(2, 3) == 5  # pinned")
+    assert e2.ok, e2.to_dict()
+
+
+def test_edit_empty_old_string_on_existing_file_rejected():
+    """The CREATE form must never become an insertion anchor on an existing
+    file -- read-before-edit and staleness stay fully intact for real files."""
+    _, ws = _ws()
+    e = ws.edit("calc.py", "", "def sneak():\n    pass\n")
+    assert not e.ok and e.error_class == ErrorClass.MODEL_CLAIM_FALSE.value, e.to_dict()
+
+
+def test_edit_create_rejects_broken_syntax():
+    """A created file faces the SAME lint gate as a rewrite: syntax-breaking
+    content never reaches disk."""
+    repo, ws = _ws()
+    e = ws.edit("tests/test_broken.py", "", "def broken(:\n    pass\n")
+    assert not e.ok and e.error_class == ErrorClass.LINT_REJECTED.value, e.to_dict()
+    assert not (repo / "tests" / "test_broken.py").exists()
+
+
+def test_edit_create_rejects_empty_content():
+    """An empty created file is no artifact -- non-persistence, refused."""
+    repo, ws = _ws()
+    e = ws.edit("tests/test_empty.py", "", "")
+    assert not e.ok and e.error_class == ErrorClass.NON_PERSISTENCE.value, e.to_dict()
+    assert not (repo / "tests" / "test_empty.py").exists()
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
