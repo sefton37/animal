@@ -97,6 +97,10 @@ class ProductStore:
         self._ensure_column("stories", "priority", "INTEGER DEFAULT 0")
         self._ensure_column("spec_checks", "regression", "INTEGER DEFAULT 0")
         self._ensure_column("spec_checks", "expected_new", "INTEGER DEFAULT 0")
+        # #463: the idempotency key for ledger-projected ingests (a discovery
+        # session re-ingested must never duplicate its epic -- the store is a
+        # PROJECTION of the ledger, calibration.py's framing)
+        self._ensure_column("epics", "source_key", "TEXT")
         self._ensure_specs_story_id_not_unique()
         self._ensure_spec_checks_fk_target()
         self.db.commit()
