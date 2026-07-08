@@ -18,8 +18,39 @@ the session keep consuming turns — a fresh resample, not a terminated run.
 Path-scoped, not whole-tree: a whole-tree revert would silently destroy any
 OTHER file's edit that successfully landed in the interim, with no ledger
 trace of the loss (red-team finding on this story's first attempt).
+
+Loop hygiene (Story #450): #448 above only covers repeated FAILED edits on ONE
+path. Two general gaps remain, both mandatory for small models per
+ARCHITECTURE.md's 'doom-loop detection (3 identical actions -> interrupt)' and
+CONSTRUCTION.md's 'detect pathology' step:
+  - Repeated actions of ANY kind (read/grep/shell -- EditAction is deliberately
+    excluded here since #448 already owns it) get a GATE event on the 3rd
+    repeat plus a corrective message; a 4th straight repeat past that
+    interrupt is a genuine doom loop and stops the run (stuck:doom_loop),
+    rather than silently burning the rest of the turn budget on one dead end.
+    "Repeated" is not just byte-identical: a period-1 CONSECUTIVE-identical
+    check alone misses (a) a model that varies one incidental field turn-to-
+    turn while making zero real progress (e.g. an oscillating read offset:
+    0,1,0,1,...) and (b) a ping-pong between two distinct dead-end actions
+    (e.g. read(A), read(B), read(A), read(B), ...) -- neither has N
+    consecutive identical actions, so the detector also checks for a period-2
+    repeating cycle sustained the same N times (red-team finding on this
+    story's first attempt; see `_is_repeated`).
+  - Bounded, condensed message history: once more than config.OBSERVATION_KEEP
+    verbatim turns of a role have accumulated, the older ones of THAT role are
+    collapsed to a short DETERMINISTIC templated summary (never a model call)
+    so a long session doesn't drown its own context window. This bounds BOTH
+    the 'user'-role tool-result turns AND the 'assistant'-role turns that echo
+    the model's own free-form 'thought' text every turn -- the first attempt
+    at this story bounded only the former, leaving a chatty small model's own
+    thought text to grow unbounded forever (red-team finding: 97% of
+    accumulated context after 30 turns in a realistic repro).
+Both are harness-owned: neither reads the model's free-form 'thought' text to
+decide anything (Law 1 -- the model never gets a vote on whether it 'is'
+repeating or on what gets collapsed).
 """
 from __future__ import annotations
+import json
 from .ledger import Ledger
 from .workspace import Workspace
 from .model import ModelPlane, ModelError, SYSTEM_PROMPT
@@ -73,6 +104,81 @@ def _feedback(env: Envelope) -> str:
     return f"[{env.action_kind} ok] {env.note}"
 
 
+def _canon(action) -> str:
+    """Canonical string key for an action's own typed to_dict() fields -- the
+    ONLY thing repeat/cycle comparisons look at. JSON (not a tuple/hash of the
+    dict) because ShellAction.argv is a list, which isn't hashable directly.
+    Never touches the model's free-form 'thought' text (Law 1)."""
+    return json.dumps(action.to_dict(), sort_keys=True)
+
+
+def _is_repeated(action, history: list, n: int = 3, max_period: int = 2) -> bool:
+    """True once the trailing window of canonical actions (history + [action])
+    shows a repeating cycle of SOME period p in 1..max_period, sustained for at
+    least n full repeats of that cycle (Story #450's general doom-loop
+    detector -- the ARCHITECTURE.md 'N identical actions -> interrupt' line,
+    generalized past both #448's edit-only case AND the naive 'n CONSECUTIVE
+    identical actions' reading of that line).
+
+    p=1 is n consecutive identical actions (the narrow reading: two reads of
+    the same path/offset, two greps of the same pattern, two shells with the
+    same argv all count as the same repeated action). p=2 additionally catches
+    (a) a model that varies ONE incidental field turn-to-turn while making
+    zero real progress (e.g. an oscillating read offset: 0,1,0,1,...) and (b)
+    a ping-pong between TWO distinct dead-end actions (e.g. read(A), read(B),
+    read(A), read(B), ...) -- neither has n CONSECUTIVE identical actions
+    (so a period-1-only check misses both -- red-team finding on this story's
+    first attempt), but each IS, canonically, a 2-element cycle repeating n
+    times.
+
+    Compares each Action's own typed to_dict() fields ONLY, via a JSON
+    canonical key -- never the model's free-form 'thought' text (Law 1: the
+    model doesn't get a vote on whether it 'is' repeating). Different kinds,
+    or genuinely different fields (e.g. a monotonically advancing read offset,
+    or reads of 4 distinct paths), never match."""
+    window_source = history + [action]
+    for p in range(1, max_period + 1):
+        need = n * p
+        if len(window_source) < need:
+            continue
+        window = [_canon(a) for a in window_source[-need:]]
+        if all(window[i] == window[i - p] for i in range(p, need)):
+            return True
+    return False
+
+
+def _collapse_observations(messages: list[dict], keep: int = 5) -> list[dict]:
+    """Bounded, condensed message history (Story #450): messages[:2] (the
+    system prompt and the initial task message) are never touched. Of every
+    OTHER message -- both the 'user'-role tool-result turns AND the
+    'assistant'-role turns that echo the model's own free-form thought+action
+    every turn -- only the most recent `keep` of EACH role stay verbatim;
+    older ones of that role have their content REPLACED with a short
+    deterministic templated summary -- derived from the message's own first
+    line, never a model call, so it is fully reproducible -- so a long
+    session's context doesn't grow without bound in EITHER direction and
+    drown a small model's own window.
+
+    Bounding only the 'user' slice (the first attempt at this story) leaves a
+    chatty small model's own per-turn 'thought' text, appended unbounded as
+    'assistant' messages, to dominate accumulated context over a long run --
+    exactly the failure this story's user story names ('drown its own context
+    window'). Both roles are bounded independently here so neither can."""
+    head, tail = messages[:2], list(messages[2:])
+    for role in ("user", "assistant"):
+        idxs = [i for i, m in enumerate(tail) if m["role"] == role]
+        if len(idxs) <= keep:
+            continue
+        for i in idxs[:-keep]:
+            content = tail[i]["content"]
+            if content.startswith("[collapsed]"):
+                continue                                   # already condensed -- idempotent
+            lines = content.splitlines()
+            gist = lines[0][:80] if lines else ""
+            tail[i] = {"role": role, "content": f"[collapsed] {gist}"}
+    return head + tail
+
+
 def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | None = None,
              ledger_dir=None, max_turns: int | None = None, ledger: Ledger | None = None,
              temperature: float | None = None) -> dict:
@@ -95,6 +201,9 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     rollback_cycles: dict[str, int] = {}        # per-path COUNT of full rollback-and-resample cycles
     cur_temp = temperature                       # bumped on each rollback so a resample is genuinely different
     stuck_path = None                            # set when a path exhausts its rollback-cycle ceiling
+    action_history: list = []                    # last dispatched actions, ANY kind (Story #450)
+    repeat_gate_fired = False                    # the soft doom-loop gate already fired this streak
+    stuck_repeat = False                         # set when the model repeats again past the interrupt
     for turn_no in range(max_turns):
         try:
             turn, meta = mp.call(role, messages, temperature=cur_temp)
@@ -154,6 +263,22 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
                     # the rest of the turn budget looping (the "rather than..." half of #448).
                     if rollback_cycles[path] >= config.MAX_EDIT_RETRIES:
                         stuck_path = path
+        # general doom-loop detection (Story #450): repeated actions of ANY kind
+        # (exact repeats OR a short repeating cycle -- see _is_repeated). A FAILED
+        # EditAction is excluded because #448 already owns repeated failed edits on
+        # one path (ceiling+resample); but a SUCCEEDED edit that oscillates
+        # (A->B->A->B, each landing) is caught by neither #448 nor a blanket edit
+        # exclusion, so successful edits ARE fed to the general cycle detector too
+        # (red-team finding on this story).
+        is_repeat = ((not isinstance(action, EditAction) or env.ok) and
+                     _is_repeated(action, action_history, n=config.REPEAT_ACTION_CEILING,
+                                  max_period=config.MAX_CYCLE_PERIOD))
+        action_history.append(action)
+        hist_cap = config.REPEAT_ACTION_CEILING * config.MAX_CYCLE_PERIOD  # enough trailing
+                                                                            # history to recognize
+                                                                            # a period-MAX_CYCLE_PERIOD cycle
+        if len(action_history) > hist_cap:
+            action_history.pop(0)
         messages.append({"role": "user", "content": _feedback(env)})
         if rolled_back:
             messages.append({"role": "user", "content":
@@ -161,9 +286,30 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
                 f"harness reverted the workspace to the last good checkpoint. "
                 f"Re-read {path} first (its read-state was cleared), then resample: a "
                 f"different old_string or approach."})
+        if is_repeat:
+            if not repeat_gate_fired:
+                L.append(EventType.GATE, {"reason": "repeated_action", "action_kind": action.kind,
+                                          "streak": config.REPEAT_ACTION_CEILING})
+                repeat_gate_fired = True
+                messages.append({"role": "user", "content":
+                    f"[gate] the harness detected {config.REPEAT_ACTION_CEILING} identical "
+                    f"{action.kind} actions in a row -- this is a doom loop, not progress. "
+                    f"Try a genuinely different approach, or finish if the task is actually done."})
+            else:
+                stuck_repeat = True          # repeated again past the interrupt -- a real doom loop
+        else:
+            repeat_gate_fired = False
+        # bounded, condensed observation history (Story #450) -- run every turn,
+        # including the one that's about to break the loop, so the FINAL messages
+        # list (what a caller inspects) always reflects the bound, not just the
+        # state as of the second-to-last turn.
+        messages = _collapse_observations(messages, keep=config.OBSERVATION_KEEP)
         if stuck_path is not None:
             L.append(EventType.GATE, {"path": stuck_path, "reason": "stuck_rollback_ceiling",
                                       "rollback_cycles": rollback_cycles[stuck_path]})
+            break
+        if stuck_repeat:
+            L.append(EventType.GATE, {"reason": "doom_loop_ceiling", "action_kind": action.kind})
             break
         if isinstance(action, FinishAction):
             finished = True
@@ -184,6 +330,7 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
         check_results.append({"name": chk.get("name"), "ok": ok, "exit_code": r["exit_code"]})
 
     stop_reason = ("stuck:" + stuck_path if stuck_path else
+                   "stuck:doom_loop" if stuck_repeat else
                    "finished" if finished else "max_turns")
     summary = {
         "session_id": L.session_id, "finished": finished, "turns": turn_no + 1,
@@ -194,4 +341,6 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     L.append(EventType.SESSION_END, summary)
     from . import bastion                      # export to the security tap (audit the operator)
     summary["bastion_feed"] = bastion.emit(summary, L)
+    summary["messages"] = messages              # in-memory only (not ledger-persisted): lets a
+                                                 # caller/test inspect the bounded/condensed history
     return summary

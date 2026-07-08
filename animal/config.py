@@ -27,6 +27,22 @@ ROLES = {
 MAX_TURNS = int(os.environ.get("ANIMAL_MAX_TURNS", "20"))
 MAX_EDIT_RETRIES = 3          # then revert-to-checkpoint + resample (90.5->57.2 lesson)
 
+# Loop hygiene (Story #450): the GENERAL doom-loop and context-growth guards that
+# complement #448's edit-specific rollback ceiling.
+REPEAT_ACTION_CEILING = 3    # N identical non-edit actions in a row -> interrupt (ARCHITECTURE.md)
+MAX_CYCLE_PERIOD = 3         # also catch a period-2 or period-3 repeating CYCLE sustained for
+                             # REPEAT_ACTION_CEILING full cycles -- a model that varies one
+                             # incidental field each turn (e.g. an oscillating read offset) or
+                             # ping-pongs between two distinct dead-end actions never has
+                             # REPEAT_ACTION_CEILING CONSECUTIVE identical actions, so a
+                             # period-1-only check misses both (red-team finding on this
+                             # story's first attempt)
+OBSERVATION_KEEP = 5         # verbatim turns kept per role (tool-result 'user' AND the model's
+                             # own per-turn 'thought' echoed as 'assistant'); older ones of
+                             # EACH role collapsed to a template -- a chatty small model's
+                             # thought text left unbounded can dwarf the tool-result slice by
+                             # orders of magnitude over a long run (red-team finding)
+
 # Paths that must be READ-ONLY inside any agent sandbox: the kernel cannot be
 # edited by the thing it runs (the implementer-edited-the-hook loophole, closed).
 def control_plane() -> list[Path]:
