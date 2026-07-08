@@ -17,6 +17,22 @@ def main(argv=None):
                    help="a check command (shlex-split); the harness runs it and records the real exit code")
     r.add_argument("--max-turns", type=int, default=None)
     sub.add_parser("learn", help="inspect the learning plane (calibration, lessons, incidents, health) — read-only")
+    b = sub.add_parser("backlog", help="read/write the local product backlog (epics + stories) — #452 CRUD")
+    bsub = b.add_subparsers(dest="backlog_cmd", required=True)
+    be = bsub.add_parser("add-epic", help="create an epic")
+    be.add_argument("title")
+    be.add_argument("--priority", type=int, default=0)
+    bs = bsub.add_parser("add-story", help="create a story under an epic (Fibonacci-validated points)")
+    bs.add_argument("epic_id", type=int)
+    bs.add_argument("title")
+    bs.add_argument("--user-story", default=None)
+    bs.add_argument("--points", type=int, default=None, dest="story_points")
+    bs.add_argument("--priority", type=int, default=0)
+    bl = bsub.add_parser("list", help="list backlog stories (optionally filtered)")
+    bl.add_argument("--epic-id", type=int, default=None)
+    bl.add_argument("--status", default=None)
+    ble = bsub.add_parser("list-epics", help="list epics (optionally filtered by status)")
+    ble.add_argument("--status", default=None)
     args = ap.parse_args(argv)
 
     if args.cmd == "run":
@@ -55,6 +71,31 @@ def main(argv=None):
         print(f"  {ec} epics / {sc} stories (the work lane populates this as specs land)")
         ps.close()
         print("healthy:", h["healthy"])
+        return 0
+
+    if args.cmd == "backlog":
+        from .product import ProductStore, ProductError
+        ps = ProductStore()
+        try:
+            if args.backlog_cmd == "add-epic":
+                eid = ps.create_epic(args.title, priority=args.priority)
+                print(f"epic #{eid} created: {args.title}")
+            elif args.backlog_cmd == "add-story":
+                sid = ps.create_story(args.epic_id, args.title, user_story=args.user_story,
+                                       story_points=args.story_points, priority=args.priority)
+                print(f"story #{sid} created under epic #{args.epic_id}: {args.title}")
+            elif args.backlog_cmd == "list":
+                for s in ps.list_backlog(epic_id=args.epic_id, status=args.status):
+                    pts = s["story_points"] if s["story_points"] is not None else "-"
+                    print(f"  #{s['id']} [{s['status']}] pts={pts} epic={s['epic_id']} {s['title']}")
+            elif args.backlog_cmd == "list-epics":
+                for e in ps.list_epics(status=args.status):
+                    print(f"  epic #{e['id']} [{e['status']}] pri={e['priority']} {e['title']}")
+        except ProductError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        finally:
+            ps.close()
         return 0
     return 2
 
