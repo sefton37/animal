@@ -20,8 +20,9 @@ def main(argv=None):
                    help="omit the compact repo file/symbol map from the system prompt "
                         "(Story #449: included by default so the coder can request the right "
                         "file directly instead of groping by trial-and-error grep/read)")
-    d = sub.add_parser("discover", help="bounded conversational discovery: decompose a topic into raw user stories (#462)")
+    d = sub.add_parser("discover", help="bounded conversational discovery: decompose a topic into raw user stories (#462); with --repo, the full M4 pipeline (#466): elicit -> cluster -> draft -> refine -> persist")
     d.add_argument("topic")
+    d.add_argument("--repo", default=None, help="run the full pipeline against this repo, persisting an epic + grounded specs")
     d.add_argument("--max-turns", type=int, default=None)
     sub.add_parser("learn", help="inspect the learning plane (calibration, lessons, incidents, health) — read-only")
     b = sub.add_parser("backlog", help="read/write the local product backlog (epics + stories) — #452 CRUD")
@@ -55,6 +56,23 @@ def main(argv=None):
     if args.cmd == "discover":
         from .discovery import run_discovery
         from .ledger import Ledger
+        if args.repo:
+            # Story #466: the single orchestration entrypoint -- elicit,
+            # cluster, draft, refine, persist. Specs land at draft/grounded
+            # only; approval remains worklane.run_work's human channel.
+            from .discovery import run_discovery_to_backlog
+            summary = run_discovery_to_backlog(args.topic, args.repo, max_turns=args.max_turns)
+            print(json.dumps(summary, indent=2))
+            died = summary["status"] in ("model_error", "maker_absent", "channel_error", "context_overflow")
+            # #466 audit F3: this branch's deliverable is SPECS, not stories --
+            # a run where every story failed to draft is a failure even if
+            # the conversation itself finished cleanly
+            specced = [st_ for st_ in summary["stories"] if st_.get("spec_id")]
+            if died and not summary["stories"]:
+                return 1
+            if summary["stories"] and not specced:
+                return 1
+            return 0
         L = Ledger()
         stories = run_discovery(args.topic, ledger=L, max_turns=args.max_turns)
         ends = L.events_of("session_end")

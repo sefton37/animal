@@ -377,7 +377,13 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
     if not g["ok"]:
         task.transition("rejected"); traj.append(task.state)
         return _finish(L, task, traj, {"rejected_at": "grounding", "reason": f"unresolved refs: {g['misses']}"})
-    task.transition("grounded"); traj.append(task.state)
+    # #466 audit F1: a spec can legitimately ENTER already 'grounded' (the M4
+    # discovery pipeline stores it that way after draft-time grounding) --
+    # the evidence was recomputed above either way, so a no-op transition
+    # must not crash the very consumer the pipeline feeds.
+    if task.state != "grounded":
+        task.transition("grounded")
+    traj.append(task.state)
 
     # Gate 0b: DoD authoring validation — vacuous / lint-bad checks rejected here
     v = validate_spec(spec, sb, repo)

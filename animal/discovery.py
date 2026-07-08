@@ -59,7 +59,7 @@ from . import config
 from .ledger import Ledger
 from .model import ModelPlane, ModelError
 from .types import EventType
-from .spec import Spec
+from .spec import Spec, SpecState
 from .grounding import ground
 from .dod import validate_spec
 from .sandbox import Sandbox
@@ -381,3 +381,109 @@ def enumerate_case_default(spec: Spec, url: str | None = None) -> list[dict]:
     from . import panel as _panel
     seat = next((x for x in _panel.JUDGE_SEATS if x["name"] == "qwen"), _panel.JUDGE_SEATS[-1])
     return enumerate_case(seat, {"user_story": spec.user_story}, url, strict=True)
+
+
+def run_discovery_to_backlog(topic: str, repo: str, *, channel=None, store=None,
+                             ledger: Ledger | None = None, max_turns: int | None = None,
+                             url: str | None = None) -> dict:
+    """Story #466 -- the M4 end-to-end: ONE open-ended sentence becomes a real
+    epic with grounded specs. Pure composition of this milestone's pieces:
+
+      run_discovery (#462)      elicit raw stories, maker-in-the-loop
+      cluster_into_epics (#463) group them (deterministic fallback)
+      ingest_epics (#463)       session-atomic projection into the store
+      draft_spec (#464)         each story -> a Gate-0-valid Spec
+      refine_scope (#465)       ambiguities put to the maker, folded verbatim
+      ProductStore.attach_spec  the spec persisted WITH its story (#453)
+
+    Every persisted spec is left at state 'grounded' (draft_spec grounded and
+    validated it) or 'draft' (refinement could not run -- maker absent) --
+    NEVER approved or beyond: approval remains the existing human channel in
+    worklane.run_work, untouched by this milestone. Per-story failures are
+    recorded and do not sink the rest (the backlog keeps what was won); a
+    maker who leaves mid-refinement keeps every drafted spec, unrefined,
+    honestly marked. The returned summary names the epic(s), every story with
+    its spec id/state, and the session status. One projection per session:
+    a session already in the store is refused loudly (the positional
+    story-row mapping is only valid for a fresh projection -- audit F2)."""
+    from .clustering import cluster_into_epics, ingest_epics
+    from .product import ProductStore, ProductError
+    from .product_owner import ProductOwnerError
+    L = ledger or Ledger()
+    st = store or ProductStore()
+    # #466 audit F2: the positional story-row mapping below is only valid for
+    # a FRESH projection of THIS session. Re-running the pipeline on a shared
+    # ledger would zip THIS call's (possibly re-ordered, re-proposed) stories
+    # against the STORED projection and silently attach wrong DoDs -- refuse
+    # loudly instead; a re-decide needs a fresh ledger/session.
+    already = st.db.execute("SELECT COUNT(*) FROM epics WHERE source_key LIKE ?",
+                            (f"discovery:{L.session_id}:%",)).fetchone()[0]
+    if already:
+        raise RuntimeError(f"session {L.session_id} is already projected into the store; "
+                           "re-running would attach specs by position against the stored "
+                           "projection -- use a fresh ledger/session")
+    stories = run_discovery(topic, channel=channel, ledger=L, max_turns=max_turns)
+    ends = L.events_of("session_end")
+    status = ends[-1].payload.get("status", "?") if ends else "?"
+    if not stories:
+        return {"status": status, "epic": None, "stories": [], "session": L.session_id}
+    clusters = cluster_into_epics(stories)
+    epic_ids = ingest_epics(st, L.session_id, clusters, stories)
+    # map each raw story index to its persisted row (ingest inserts in
+    # cluster order, so per-epic row order == story_indices order)
+    story_rows: dict[int, int] = {}
+    for eid, cluster in zip(epic_ids, clusters):
+        rows = st.db.execute("SELECT id FROM stories WHERE epic_id=? ORDER BY id", (eid,)).fetchall()
+        for (row_id,), idx in zip(rows, cluster["story_indices"]):
+            story_rows[idx] = row_id
+    maker_present = True
+    out_stories = []
+    for idx, raw in enumerate(stories):
+        entry = {"story_id": story_rows.get(idx), "title": raw.get("title", "")}
+        try:
+            spec = draft_spec(raw, repo, url=url)
+            if maker_present:
+                try:
+                    spec = refine_scope(spec, channel or _tui_channel, repo, ledger=L, url=url)
+                    spec.state = SpecState.GROUNDED.value
+                except MakerAbsent:
+                    # no maker: keep the DRAFT (grounded+validated but with
+                    # ambiguities unresolved), stop asking for the rest
+                    maker_present = False
+                    spec.state = SpecState.DRAFT.value
+                    L.append(DISCOVERY_EVENT, {"kind": "maker_absent",
+                                               "at": f"refine story {idx}"})
+            else:
+                spec.state = SpecState.DRAFT.value
+            row_id = story_rows.get(idx)
+            if row_id is None:      # mapping hole: recorded per-story, never a KeyError crash
+                raise ProductError(f"no persisted story row for index {idx}")
+            try:
+                st.attach_spec(row_id, spec)
+            except ProductError as e:
+                # the DRAFT succeeded; the ATTACH failed (e.g. an active spec
+                # already on the story) -- typed honestly, not as draft_failed
+                L.append(DISCOVERY_EVENT, {"kind": "attach_failed", "story_index": idx,
+                                           "title": raw.get("title", ""),
+                                           "error": f"{type(e).__name__}: {e}"})
+                entry.update({"spec_id": None, "spec_state": None,
+                              "error": f"attach failed: {e}"})
+                out_stories.append(entry)
+                continue
+            entry.update({"spec_id": spec.id, "spec_state": spec.state})
+        except (ProductOwnerError, ProductError, RuntimeError, ValueError) as e:
+            # a story that cannot draft does not sink the others -- recorded,
+            # surfaced in the summary, visible in the ledger
+            L.append(DISCOVERY_EVENT, {"kind": "draft_failed", "story_index": idx,
+                                       "title": raw.get("title", ""),
+                                       "error": f"{type(e).__name__}: {e}"})
+            entry.update({"spec_id": None, "spec_state": None,
+                          "error": f"{type(e).__name__}: {e}"})
+        out_stories.append(entry)
+    epics = [{"id": r[0], "title": r[1]} for r in st.db.execute(
+        f"SELECT id, name FROM epics WHERE id IN ({','.join('?' * len(epic_ids))}) ORDER BY id",
+        epic_ids).fetchall()]
+    return {"status": status, "session": L.session_id,
+            "epic": epics[0],                # the AC's singular; epics is authoritative
+            "epics": epics,
+            "stories": out_stories}
