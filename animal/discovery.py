@@ -42,9 +42,16 @@ is product_owner._chat (JSON-schema-constrained spec authoring), not
 ModelPlane.call's turn protocol -- the substance (architect-seat model,
 constrained draft object, Spec.from_dict validation) is identical.
 
-Deliberately NOT here (later M4 stories): the ambiguity-resolution pass
-(#465). run_discovery returns RAW stories -- title / narrative / notes --
-shaped enough to hand onward; #463's clustering persists them.
+Story #465 lives here too: refine_scope surfaces scope AMBIGUITY before a
+story is finalized -- it reuses panel.py's interpretation-enumeration (the
+Phase-3 shared-prior machinery; never a second enumeration prompt/schema) to
+list ambiguous terms/boundaries/units in the spec, puts each ONE to the
+maker over the channel, and folds the maker's LITERAL answer into the spec
+as an explicit resolved-reading bullet (intent, or out_of_scope when the
+maker excludes it) -- never silently dropped, never paraphrased. The amended
+spec is re-validated with the same dod.validate_spec the work lane runs.
+NAMED DEVIATION from the AC letter: re-validation requires the repo, which
+the AC's two-arg signature omitted -- repo is a required third parameter.
 """
 from __future__ import annotations
 import json
@@ -56,6 +63,7 @@ from .spec import Spec
 from .grounding import ground
 from .dod import validate_spec
 from .sandbox import Sandbox
+from .panel import enumerate_case
 
 # The event-type string every dialogue move lands under (model question, maker
 # answer, proposed story, finish, and every fault) -- discovery is auditable
@@ -275,3 +283,101 @@ def run_discovery(topic: str, channel=None, ledger: Ledger | None = None,
                                          "stories": len(stories),
                                          "titles": [s["title"] for s in stories]})
     return stories
+
+
+def refine_scope(spec: Spec, channel, repo: str, *, ledger: Ledger | None = None,
+                 url: str | None = None, max_questions: int = 12) -> Spec:
+    """Story #465: surface and resolve scope ambiguity BEFORE a story is
+    finalized. panel.enumerate_case (Phase 3's interpretation-enumeration --
+    reused, not redefined; strict mode, so a dead model plane RAISES instead
+    of masquerading as 'no ambiguities' -- audit F1) lists every ambiguous
+    term/boundary/unit in the spec's user story; each is put to the MAKER
+    over the channel, and the maker's answer is folded in as an explicit
+    resolved-reading bullet: spec.intent gets 'resolved reading: <term> =
+    <answer>', or spec.out_of_scope gets the bullet when the answer begins
+    with 'out of scope' (the routing target is ledger-recorded -- audit F2).
+    Verbatim means strip()-verbatim: outer whitespace trimmed, inner text
+    untouched. An EMPTY answer resolves nothing and is recorded as skipped,
+    never folded as a vacuous bullet; a termless enumeration item is likewise
+    recorded as skipped, never silently dropped (audit F5/F8). Questions are
+    capped at max_questions with the truncation recorded (audit F6).
+
+    The amended spec is a NEW Spec (from_dict round-trip) re-checked with the
+    SAME Gate-0 pair draft_spec runs: ground() -- maker prose can name an
+    existing-but-not-a-file token that would brick Gate 0a one gate later
+    (audit F3) -- and dod.validate_spec; either failure raises ValueError
+    naming the problem, before the maker moves on. If nothing was folded the
+    ORIGINAL spec object is returned. MakerAbsent propagates (no maker, no
+    refinement); other channel exceptions propagate raw -- this is a library
+    call, not a session loop."""
+    try:
+        ambiguities = enumerate_case_default(spec, url)
+    except Exception as e:
+        raise RuntimeError(f"ambiguity enumeration failed (model plane unreachable?): "
+                           f"{type(e).__name__}: {e}") from e
+    if ledger is not None:
+        ledger.append(DISCOVERY_EVENT, {"kind": "enumerate", "count": len(ambiguities)})
+    if not ambiguities:
+        return spec
+    d = spec.to_dict()
+    intent = list(d.get("intent") or [])
+    out_of_scope = list(d.get("out_of_scope") or [])
+    folded = 0
+    for n, amb in enumerate(ambiguities):
+        if n >= max_questions:
+            if ledger is not None:
+                ledger.append(DISCOVERY_EVENT, {"kind": "refine_truncated",
+                                                "asked": max_questions,
+                                                "dropped": len(ambiguities) - max_questions})
+            break
+        amb = amb if isinstance(amb, dict) else {}
+        term = str(amb.get("term") or "").strip()
+        assumed = str(amb.get("assumed_reading") or "").strip()
+        if not term:
+            if ledger is not None:
+                ledger.append(DISCOVERY_EVENT, {"kind": "refine_skipped",
+                                                "why": "enumeration item has no term", "item": amb})
+            continue
+        question = (f"Ambiguity in scope: {term!r}"
+                    + (f" (the spec currently assumes: {assumed})" if assumed else "")
+                    + " -- which reading do you want?")
+        raw_answer = channel(question)                 # MakerAbsent propagates
+        answer = "" if raw_answer is None else str(raw_answer).strip()
+        if not answer:
+            if ledger is not None:
+                ledger.append(DISCOVERY_EVENT, {"kind": "refine_skipped",
+                                                "why": "empty answer resolves nothing",
+                                                "term": term, "question": question})
+            continue
+        bullet = f"resolved reading: {term} = {answer}"
+        routed_to = "out_of_scope" if answer.lower().startswith("out of scope") else "intent"
+        (out_of_scope if routed_to == "out_of_scope" else intent).append(bullet)
+        folded += 1
+        if ledger is not None:
+            ledger.append(DISCOVERY_EVENT, {"kind": "refine", "term": term,
+                                            "question": question, "answer": answer,
+                                            "routed_to": routed_to})
+    if not folded:
+        return spec                                    # nothing changed, nothing rebuilt
+    d["intent"], d["out_of_scope"] = intent, out_of_scope
+    refined = Spec.from_dict(d)                        # structural validation, new object
+    g = ground(refined, repo)                          # Gate 0a NOW, not one gate later
+    if not g["ok"]:
+        raise ValueError(f"refined spec no longer grounds: unresolved refs {g['misses']} "
+                         "(a resolved-reading bullet names something that is not a real file)")
+    v = validate_spec(refined, Sandbox(), repo)        # the SAME Gate-0b the work lane runs
+    if not v["ok"]:
+        bad = [c for c in v["checks"] if not c["ok"]]
+        raise ValueError(f"refined spec fails DoD authoring validation: {bad}")
+    return refined
+
+
+def enumerate_case_default(spec: Spec, url: str | None = None) -> list[dict]:
+    """panel.enumerate_case with its measured seat default (qwen -- gpt-oss's
+    reasoning channel returns empty content on the nested-enumeration schema;
+    see panel.measure_shared_prior) in STRICT mode: enumeration failure
+    raises, it never masquerades as 'no ambiguities' (audit F1). Split out so
+    tests can monkeypatch the enumeration without touching panel internals."""
+    from . import panel as _panel
+    seat = next((x for x in _panel.JUDGE_SEATS if x["name"] == "qwen"), _panel.JUDGE_SEATS[-1])
+    return enumerate_case(seat, {"user_story": spec.user_story}, url, strict=True)

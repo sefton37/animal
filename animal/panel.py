@@ -223,7 +223,12 @@ def audit_review(spec, results: list[dict], run_diff: str, url: str | None = Non
 
 # --- shared-prior sub-exit: interpretation-enumeration ---
 
-def enumerate_case(seat: dict, shared_case: dict, url: str | None = None) -> list[dict]:
+def enumerate_case(seat: dict, shared_case: dict, url: str | None = None,
+                   strict: bool = False) -> list[dict]:
+    """strict (Story #465 audit F1): the lenient default swallows every
+    exception into [] -- fine for measurement sweeps, but a caller whose JOB
+    is surfacing ambiguity must be able to tell 'enumeration failed' from
+    'no ambiguities found'. strict=True re-raises instead of masking."""
     user = (f'SPEC:\n{shared_case["user_story"]}\n\nList every ambiguous term/boundary/unit and the reading '
             'the spec assumes. Return JSON {ambiguities:[{term, assumed_reading}]}.')
     try:
@@ -232,6 +237,8 @@ def enumerate_case(seat: dict, shared_case: dict, url: str | None = None) -> lis
         m = re.search(r"\{.*\}", o, re.S)
         return json.loads(m.group(0) if m else o).get("ambiguities", [])
     except Exception:
+        if strict:
+            raise
         return []
 
 
