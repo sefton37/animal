@@ -7,6 +7,17 @@ The check runner runs any task checks itself and records the REAL exit codes —
 so a model that *claims* a check passed is contradicted by the harness's computed
 result. That plus the workspace's non-persistence detection are the two seeded
 attacks the Phase 1 exit requires the kernel to catch.
+
+Rollback-and-resample (Story #448): agents succeed fast and fail slow — a coder
+stuck compounding the SAME failing edit on one target burns its whole turn
+budget on a dead end instead of stepping back. The loop counts consecutive
+failed edit envelopes PER PATH; at config.MAX_EDIT_RETRIES it reverts ONLY the
+failing path (Workspace.restore_path) to the checkpoint taken right before
+that failure streak began, records an EventType.GATE ledger event, and lets
+the session keep consuming turns — a fresh resample, not a terminated run.
+Path-scoped, not whole-tree: a whole-tree revert would silently destroy any
+OTHER file's edit that successfully landed in the interim, with no ledger
+trace of the loss (red-team finding on this story's first attempt).
 """
 from __future__ import annotations
 from .ledger import Ledger
@@ -79,9 +90,14 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
                 {"role": "user", "content": f"Task: {task}\n\nBegin. Emit one action."}]
 
     edits_landed, finished = 0, False
+    edit_fail_counts: dict[str, int] = {}       # per-path consecutive-failure streaks
+    edit_fail_checkpoints: dict[str, str] = {}  # path -> tree hash before its streak began
+    rollback_cycles: dict[str, int] = {}        # per-path COUNT of full rollback-and-resample cycles
+    cur_temp = temperature                       # bumped on each rollback so a resample is genuinely different
+    stuck_path = None                            # set when a path exhausts its rollback-cycle ceiling
     for turn_no in range(max_turns):
         try:
-            turn, meta = mp.call(role, messages, temperature=temperature)
+            turn, meta = mp.call(role, messages, temperature=cur_temp)
         except ModelError as e:
             L.append(EventType.ERROR, {"where": "model_call", "error": str(e)})
             break
@@ -99,11 +115,56 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
             messages.append({"role": "user", "content": f"[invalid action: {e}] Re-emit a valid action."})
             continue
         L.append(EventType.ACTION, action.to_dict())
+        # snapshot BEFORE dispatch so a would-be first failure of a new streak has
+        # a checkpoint from the moment before it, not after (Story #448)
+        pre_edit_snapshot = ws.snapshot() if isinstance(action, EditAction) else None
         env = _dispatch(action, ws, sb)
         L.append(EventType.ENVELOPE, env.to_dict())
-        if env.action_kind == "edit" and env.ok:
-            edits_landed += 1
+        rolled_back = False
+        if env.action_kind == "edit":
+            path = action.path
+            if env.ok:
+                edits_landed += 1
+                edit_fail_counts.pop(path, None)
+                edit_fail_checkpoints.pop(path, None)
+            else:
+                # rollback-and-resample: a coder that keeps failing the SAME edit
+                # is compounding a dead end, not making progress. Count consecutive
+                # failures per path; at the retry cap, revert to the checkpoint from
+                # before this streak and let the session keep going (a fresh resample)
+                # instead of burning its whole turn budget on the same wrong anchor.
+                if edit_fail_counts.get(path, 0) == 0:
+                    edit_fail_checkpoints[path] = pre_edit_snapshot
+                edit_fail_counts[path] = edit_fail_counts.get(path, 0) + 1
+                if edit_fail_counts[path] >= config.MAX_EDIT_RETRIES:
+                    ws.restore_path(edit_fail_checkpoints[path], path)
+                    rollback_cycles[path] = rollback_cycles.get(path, 0) + 1
+                    L.append(EventType.GATE, {
+                        "path": path, "reason": "max_edit_retries_exceeded",
+                        "attempts": edit_fail_counts[path], "rollback_cycle": rollback_cycles[path]})
+                    edit_fail_counts[path] = 0
+                    edit_fail_checkpoints.pop(path, None)
+                    rolled_back = True
+                    # a REAL resample: raise the temperature so the next attempt is a
+                    # genuinely different sample, not a re-run of the same greedy decode.
+                    base = cur_temp if cur_temp is not None else config.ROLES[role]["temperature"]
+                    cur_temp = min(round(base + 0.25, 2), 1.2)
+                    # CEILING: after MAX_EDIT_RETRIES full rollback cycles on ONE path the
+                    # coder is not escaping the dead end -- stop (stuck), rather than burn
+                    # the rest of the turn budget looping (the "rather than..." half of #448).
+                    if rollback_cycles[path] >= config.MAX_EDIT_RETRIES:
+                        stuck_path = path
         messages.append({"role": "user", "content": _feedback(env)})
+        if rolled_back:
+            messages.append({"role": "user", "content":
+                f"[gate] {config.MAX_EDIT_RETRIES} consecutive failed edits on {path} -- "
+                f"harness reverted the workspace to the last good checkpoint. "
+                f"Re-read {path} first (its read-state was cleared), then resample: a "
+                f"different old_string or approach."})
+        if stuck_path is not None:
+            L.append(EventType.GATE, {"path": stuck_path, "reason": "stuck_rollback_ceiling",
+                                      "rollback_cycles": rollback_cycles[stuck_path]})
+            break
         if isinstance(action, FinishAction):
             finished = True
             break
@@ -122,9 +183,11 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
         L.append(EventType.ENVELOPE, env.to_dict())
         check_results.append({"name": chk.get("name"), "ok": ok, "exit_code": r["exit_code"]})
 
+    stop_reason = ("stuck:" + stuck_path if stuck_path else
+                   "finished" if finished else "max_turns")
     summary = {
         "session_id": L.session_id, "finished": finished, "turns": turn_no + 1,
-        "edits_landed": edits_landed, "run_diff": run_diff,
+        "edits_landed": edits_landed, "run_diff": run_diff, "stop_reason": stop_reason,
         "changed": bool(run_diff.strip()), "checks": check_results,
         "sandbox_mode": sb.mode, "ledger": str(L.path),
     }

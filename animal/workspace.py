@@ -95,6 +95,30 @@ class Workspace:
         self._git("read-tree", tree)
         return self._git("checkout-index", "-a", "-f").returncode == 0
 
+    def restore_path(self, tree: str, path: str) -> bool:
+        """Revert exactly ONE path to its content at a shadow-git snapshot,
+        leaving every other file in the workspace untouched.
+
+        Story #448 red-team fix: the rollback-and-resample gate must not use
+        the whole-tree restore() above, because a successful edit to a
+        DIFFERENT path that landed after the checkpoint was taken (but before
+        the failing streak on THIS path hit its retry cap) would be silently
+        destroyed -- with zero ledger trace, since the GATE event only records
+        the failing path. Scoping the revert to exactly `path` means an
+        unrelated file's already-landed work can never be wiped by a gate it
+        has nothing to do with."""
+        p = self._resolve(path)
+        if p is None:
+            return False
+        content = self.blob_at(tree, path)
+        if content is None:
+            if p.exists():
+                p.unlink()               # didn't exist at the checkpoint -- remove it
+        else:
+            p.write_text(content)
+        self._reads.pop(str(p), None)    # any prior read-state for this path is now stale
+        return True
+
     def changed_paths(self, tree_a: str, tree_b: str) -> list[str]:
         """Names of paths that differ (added/modified/deleted) between two
         shadow-git snapshots."""
