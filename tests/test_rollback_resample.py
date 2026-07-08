@@ -13,9 +13,14 @@ test_interleaved_success_on_other_path_survives_gate_rollback).
 Deterministic: a scripted stand-in replaces the live llama-swap ModelPlane call,
 so no model server is required. Run: python3 tests/test_rollback_resample.py
 """
-import sys, tempfile
+import os, sys, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Redirect ALL var/ writes (ledgers, bastion feed) for this test process
+# BEFORE any animal import resolves config.VAR (a #461 audit found suite runs
+# appending records to the production var/bastion-feed.jsonl).
+os.environ["ANIMAL_HOME"] = tempfile.mkdtemp(prefix="animal-test-home-")
 
 import animal.loop as loop
 from animal.ledger import Ledger

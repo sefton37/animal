@@ -1347,6 +1347,79 @@ def test_panel_audit_review_aggregates_flag_votes():
     assert list(out["per_seat"].values()).count("unsound") == 2, out
 
 
+# --- Story #461: the composed end-to-end TDD chain (dogfood) ---
+
+def test_run_tdd_work_end_to_end_dogfood():
+    """THE composition test: one run_tdd_work call on a toy repo with a
+    deliberately-buggy function drives the ENTIRE M3 chain -- model-authored
+    spec (#457), TDD red-green with a harness-confirmed genuine red (#458),
+    verifier calibration (#459), audit re-run + cross-family audit panel
+    (#460) -- to 'done', with every gate visible in the ledger in order.
+    All model calls are monkeypatched (the test_phase3 substitution pattern);
+    every check result, diff, and gate verdict is computed by the real
+    harness."""
+    import animal.panel as panel_mod
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"po": 0, "tester": 0, "coder": 0, "premise": 0, "audit": 0}
+
+    def fake_chat(role, messages, url=None, timeout=600):   # the product-owner (#457)
+        calls["po"] += 1
+        return json.dumps({"user_story": "calc.add must sum its arguments", "intent": ["fix add"],
+                           "out_of_scope": ["anything but calc.add"],
+                           "dod": [{"name": "add-sums",
+                                    "argv": ["python3", "-c", "import calc; assert calc.add(2,3)==5"],
+                                    "comparator": "exit_zero"}]})
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):   # tester + implementer
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_add.py").write_text("import calc\nassert calc.add(2, 3) == 5\n")
+            return {"run_diff": "diff --git a/tests/test_add.py b/tests/test_add.py\n",
+                    "changed_paths": ["tests/test_add.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return a + b\n")
+        return {"run_diff": "diff --git a/calc.py b/calc.py\n", "changed_paths": ["calc.py"],
+                "turns": 2, "changed": True, "edits_landed": 1, "finished": True}
+
+    def fake_review(spec_, url=None, rule="majority"):       # Gate 0c premise panel
+        calls["premise"] += 1
+        return {"panel_verdict": "sound", "flagged": False, "per_seat": {}, "reasons": {}}
+
+    def fake_audit(spec_, results_, run_diff_, url=None, rule="majority"):   # Gate 3b audit panel
+        calls["audit"] += 1
+        return {"panel_verdict": "sound", "flagged": False, "no_user_story": False,
+                "per_seat": {}, "reasons": {}}
+
+    orig = (product_owner._chat, worklane.run_task, panel_mod.review_spec, panel_mod.audit_review)
+    product_owner._chat = fake_chat
+    worklane.run_task = fake_run_task
+    panel_mod.review_spec = fake_review
+    panel_mod.audit_review = fake_audit
+    try:
+        r = worklane.run_tdd_work("calc.add must sum its arguments", str(repo),
+                                  approver=lambda k, s: "approve", max_turns=2,
+                                  calibration_db=str(Path(tempfile.mkdtemp(prefix="animal-p5-cal-")) / "l.db"),
+                                  ledger_dir=tempfile.mkdtemp(prefix="animal-p5-led-"))
+    finally:
+        product_owner._chat, worklane.run_task, panel_mod.review_spec, panel_mod.audit_review = orig
+
+    assert r["final_state"] == "done", r
+    assert r["trajectory"] == ["draft", "grounded", "approved", "building", "verifying", "done"], r["trajectory"]
+    assert calls == {"po": 1, "tester": 1, "coder": 1, "premise": 1, "audit": 1}, calls
+    # the full gate sequence, in ledger order (subsequence: other gates like
+    # tester_scope/tester_artifact/audit_rerun sit between these, by design)
+    events = [json.loads(l) for l in Path(r["ledger"]).read_text().splitlines()]
+    gates = [e["payload"]["gate"] for e in events if e["type"] == "gate" and "gate" in e["payload"]]
+    expected = ["grounding", "dod_authoring", "red_confirmed", "dod_verify", "verifier", "audit_panel"]
+    it = iter(gates)
+    assert all(g in it for g in expected), f"gate order not satisfied: expected {expected} as a subsequence of {gates}"
+    # and the #458/#460 gates are present too -- the chain really ran the tdd + audit path
+    for g in ("tester_scope", "tester_artifact", "audit_rerun", "premise_panel"):
+        assert g in gates, f"missing gate {g} in {gates}"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

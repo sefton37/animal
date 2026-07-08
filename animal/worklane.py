@@ -319,6 +319,35 @@ def run_work_from_story(user_story: str, repo: str, approver=None, po_role: str 
     return run_work(spec, repo, approver=approver, **kw)
 
 
+def run_tdd_work(user_story: str, repo: str, approver=None, implementer_role: str = "coder",
+                 ledger_dir=None, max_turns: int | None = None, **kw) -> dict:
+    """Story #461: the COMPOSED end-to-end TDD chain -- one call from a
+    plain-language user story to a harness-verified outcome, every gate the
+    M3 stories built stacked in order:
+
+      Gate 0  product-owner authors the Spec (#457: model-authored, retried,
+              validated) -> grounding -> DoD authoring validation ->
+              cross-family premise panel (default-on here)
+      human   approval over the real channel (nothing model-reachable)
+      build   TDD tester phase (#458: harness-confirmed genuine red,
+              sha-pinned artifact) -> implementer -> DoD verify + tester
+              GREEN re-run
+      Gate 3  audit re-run in a fresh sandbox (#460, unconditional) ->
+              verifier calibration (#459: claimed-vs-verified as data) ->
+              cross-family audit panel (#460, default-on here)
+
+    Composition only: every behavior lives in (and is tested against) the
+    pieces this calls -- author_spec via run_work_from_story, then
+    run_work(tdd=True). No gate logic is duplicated here. tdd is HARD-CODED,
+    not defaulted (red-team F1): the panels are legitimately overridable, but
+    a run_tdd_work whose tester never runs is a lie in the function name --
+    a caller that wants that already has run_work_from_story."""
+    kw["tdd"] = True
+    return run_work_from_story(user_story, repo, approver=approver,
+                               implementer_role=implementer_role,
+                               ledger_dir=ledger_dir, max_turns=max_turns, **kw)
+
+
 def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "coder",
              ledger_dir=None, max_turns: int | None = None, premise_panel: bool = False,
              learn: bool = False, include_repo_map: bool = True, tdd: bool = False,
@@ -612,7 +641,10 @@ def run_work(spec: Spec, repo: str, approver=None, implementer_role: str = "code
         cal = Calibration(db_path=calibration_db)
         n_cal = cal.ingest_ledger(L, role=implementer_role)
         cal.close()
-        les = Lessons()
+        # same-store symmetry (#461 red-team F5): lessons live in the same
+        # learning.db -- a redirected caller must not split lessons from
+        # calibration across two databases
+        les = Lessons(db_path=calibration_db)
         paths = [g["ref"] for g in spec.groundings if g.get("exists")]
         n_les = 0
         for c, r in zip(spec.dod, results):
