@@ -13,7 +13,7 @@ changes nothing produces an empty diff, which the loop reads as NON_PERSISTENCE
 if a change was claimed. "No diff = no work."
 """
 from __future__ import annotations
-import subprocess, hashlib, difflib, os
+import subprocess, hashlib, difflib, os, re
 from pathlib import Path
 from .types import Envelope, ErrorClass
 from . import config
@@ -22,6 +22,39 @@ from . import editlint
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+class AmbiguousMatch(Exception):
+    """Raised by a fuzzy-cascade tier (Story #446) when >=2 candidate spans in
+    the same file score within _AMBIGUITY_MARGIN of the best score -- it is
+    genuinely unclear which one old_string meant. The harness refuses to guess:
+    edit() turns this into a MODEL_CLAIM_FALSE envelope (the anchor wasn't the
+    unique locator its use implicitly claimed to be), never a silent pick of
+    the first/best candidate."""
+
+
+# The fuzzy-apply cascade: an explicit, ordered, named list of match strategies.
+# Workspace._locate tries each in turn and stops at the first that finds
+# something -- so a small, cosmetically-imperfect old_string (indentation
+# reshaped, whitespace run-length changed, or just plain "close enough") still
+# lands, instead of bouncing forever as "old_string not found". Every successful
+# match reports WHICH tier fired (env.computed['match_strategy']) so a fuzzy hit
+# is never silently indistinguishable from an exact one.
+_STRATEGIES = ("exact", "whitespace_normalized", "indentation_agnostic", "line_window")
+
+_LINE_WINDOW_FLOOR = 0.85    # similarity floor for the line-window (last-resort) tier
+_AMBIGUITY_MARGIN = 0.02     # candidates within this score of the best are indistinguishable
+# A FIXED absolute margin is not enough: two DIFFERENT (non-duplicate) candidate
+# windows can be structurally similar enough that old_string scores higher against
+# the block the model did NOT mean than against the one it did, by a gap bigger
+# than any small fixed constant -- yet the winning score still isn't close to a
+# perfect match, which is itself the tell that the fuzzy hit is not trustworthy
+# on its own. So the effective margin SCALES with how far the winner is from a
+# perfect match (1.0): a fuzzy hit that isn't near-perfect must beat its nearest
+# rival by MORE than its own remaining imperfection (times this safety factor)
+# to be trusted outright; a near-perfect hit (best ~= 1.0) falls back to the
+# small fixed floor below. See _match_line_window.
+_AMBIGUITY_RELATIVE_FACTOR = 1.25
 
 
 class Workspace:
@@ -136,13 +169,21 @@ class Workspace:
         if seen != _sha(content):
             return Envelope("edit", False, ErrorClass.INVARIANT_VIOLATION.value,
                             note="stale: file changed on disk since it was read")
-        # match: exact, else whitespace-normalized fallback (minimal fuzzy cascade)
-        match = self._locate(content, old_string)
+        # match: the ordered fuzzy-apply cascade (_STRATEGIES) -- exact first,
+        # then progressively fuzzier tiers, stopping at the first hit. A tier
+        # that finds >=2 equally-good candidates refuses rather than guesses.
+        try:
+            match = self._locate(content, old_string)
+        except AmbiguousMatch as e:
+            return Envelope("edit", False, ErrorClass.MODEL_CLAIM_FALSE.value,
+                            note=f"old_string is ambiguous, refusing to guess: {e}")
         if match is None:
             return Envelope("edit", False, ErrorClass.MODEL_CLAIM_FALSE.value,
-                            note="old_string not found (exact or whitespace-normalized)")
-        start, end = match
-        # disproportionate-match guard: refuse a replacement that dwarfs the anchor
+                            note=f"old_string not found (tried: {', '.join(_STRATEGIES)})")
+        start, end, strategy = match
+        # disproportionate-match guard: refuse a replacement that dwarfs the anchor.
+        # Applied AFTER the cascade returns a span, so it fires at every tier --
+        # exact or fuzzy -- not just on an exact match.
         if len(new_string) > max(len(old_string) * 8, len(old_string) + 400):
             return Envelope("edit", False, ErrorClass.INVARIANT_VIOLATION.value,
                             note="disproportionate edit refused (replacement >> anchor)")
@@ -168,18 +209,149 @@ class Workspace:
         removed = sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---"))
         return Envelope("edit", True, computed={
             "path": path, "before_hash": before_hash, "after_hash": _sha(after),
-            "diff": diff, "added": added, "removed": removed})
+            "diff": diff, "added": added, "removed": removed, "match_strategy": strategy})
 
+    # --- the fuzzy-apply cascade (Story #446) ---
     def _locate(self, content: str, needle: str):
+        """Try each strategy in _STRATEGIES, in order, stopping at the first
+        that finds a match. Returns (start, end, strategy_name), or None if no
+        strategy locates old_string. Raises AmbiguousMatch if a tier finds the
+        anchor but can't tell which of >=2 equally-good candidates was meant."""
+        for name in _STRATEGIES:
+            result = getattr(self, f"_match_{name}")(content, needle)
+            if result is not None:
+                start, end = result
+                return (start, end, name)
+        return None
+
+    @staticmethod
+    def _line_starts(content: str, lines: list[str]) -> list[int]:
+        """Byte offsets into `content` at which each physical line (and one
+        past the last) begins -- lets a line-window tier slice back into the
+        original string once it has picked a window of lines."""
+        starts, pos = [], 0
+        for l in lines:
+            starts.append(pos)
+            pos += len(l)
+        starts.append(pos)
+        return starts
+
+    def _match_exact(self, content: str, needle: str):
+        """Tier 1: byte-for-byte substring match. Refuses (AmbiguousMatch) when
+        old_string occurs >1 time -- the user story wants a refusal, not a silent
+        guess, when the anchor matches two candidate spots (e.g. two byte-identical
+        code blocks). A single unique occurrence lands as before. (#446 red-team:
+        the ambiguity guard belongs on every tier, exact included, not only fuzzy.)"""
         i = content.find(needle)
-        if i >= 0:
-            return (i, i + len(needle))
-        # whitespace-normalized fallback: match ignoring run-length of whitespace
-        import re
+        if i < 0:
+            return None
+        if content.find(needle, i + 1) >= 0:
+            raise AmbiguousMatch(
+                f"'exact' tier: old_string occurs {content.count(needle)} times "
+                f"-- refusing to guess which was meant; add surrounding context to disambiguate")
+        return (i, i + len(needle))
+
+    def _match_whitespace_normalized(self, content: str, needle: str):
+        """Tier 2: match ignoring RUN-LENGTH of whitespace -- any run of
+        whitespace in old_string matches any run of whitespace on disk (tabs
+        vs spaces, 2- vs 4-space reindents, trailing-space drift). This is the
+        original single fallback the cascade replaces; kept first among the
+        fuzzy tiers as the tightest. >=2 equally-good (verbatim, post-
+        normalization) matches are refused as ambiguous."""
         pat = re.escape(needle)
         pat = re.sub(r"(\\ |\\\t|\\\n|\\\r)+", r"\\s+", pat)
-        m = re.search(pat, content)
-        return (m.start(), m.end()) if m else None
+        matches = list(re.finditer(pat, content))
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise AmbiguousMatch(
+                f"'whitespace_normalized' tier: {len(matches)} equally-good candidate matches")
+        return (matches[0].start(), matches[0].end())
+
+    def _match_indentation_agnostic(self, content: str, needle: str):
+        """Tier 3: per-physical-line match after normalizing each line's
+        whitespace (leading and trailing stripped, internal runs collapsed to
+        a single space) and requiring WHOLE-LINE correspondence across the
+        window. Catches indentation reshapes (spaces vs tabs, 2- vs 4-space)
+        via a structurally different mechanism than tier 2's unanchored
+        substring regex: a line-oriented exact comparison rather than a
+        single regex search over the whole file. For plain leading-indent
+        drift tier 2 usually already resolves it (its \\s+ substitution is
+        unanchored and reaches the same result first); this tier is defense
+        in depth for that same failure class and the natural step down before
+        the last-resort genuinely-fuzzy line_window tier."""
+        def _norm_line(l: str) -> str:
+            return re.sub(r"\s+", " ", l.strip())
+
+        needle_lines = needle.splitlines()
+        if not needle_lines:
+            return None
+        n = len(needle_lines)
+        target = [_norm_line(l) for l in needle_lines]
+        content_lines = content.splitlines(keepends=True)
+        if len(content_lines) < n:
+            return None
+        starts = self._line_starts(content, content_lines)
+        candidates = []
+        for i in range(0, len(content_lines) - n + 1):
+            window = content_lines[i:i + n]
+            if [_norm_line(l) for l in window] == target:
+                candidates.append((starts[i], starts[i + n]))
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            raise AmbiguousMatch(
+                f"'indentation_agnostic' tier: {len(candidates)} equally-good candidate windows")
+        return candidates[0]
+
+    def _match_line_window(self, content: str, needle: str):
+        """Tier 4 (last resort): slide a window the same line-length as
+        old_string across the file and score each against it with
+        difflib.SequenceMatcher, keeping windows at/above _LINE_WINDOW_FLOOR.
+        This is the genuinely-fuzzy tier -- everything before it is a
+        structural (whitespace/indentation) match. When the best-scoring
+        window has a clear margin over the rest, it wins outright (that's the
+        cascade doing its job, not guessing); when >=2 windows are too close
+        to call apart, it is genuinely unclear which the model meant and the
+        tier refuses.
+
+        "Too close to call" is NOT a fixed absolute gap (see the comment on
+        _AMBIGUITY_RELATIVE_FACTOR above): two structurally-different,
+        non-duplicate blocks can legitimately separate by more than a small
+        fixed constant while the winner is still nowhere near a perfect
+        match -- exactly the shape where an old_string that already contains
+        the model's intended fix for block A scores incidentally higher
+        against unrelated, already-correct block B than against the real,
+        still-imperfect target A. The effective margin scales with the
+        winner's own distance from 1.0 so that a merely-decent win over a
+        decent runner-up is still refused, while a near-exact hit confidently
+        beats an unrelated partial match."""
+        needle_lines = needle.splitlines(keepends=True)
+        n = len(needle_lines)
+        if n == 0:
+            return None
+        content_lines = content.splitlines(keepends=True)
+        if len(content_lines) < n:
+            return None
+        starts = self._line_starts(content, content_lines)
+        scored = []
+        for i in range(0, len(content_lines) - n + 1):
+            window_text = "".join(content_lines[i:i + n])
+            ratio = difflib.SequenceMatcher(None, window_text, needle).ratio()
+            if ratio >= _LINE_WINDOW_FLOOR:
+                scored.append((ratio, starts[i], starts[i + n]))
+        if not scored:
+            return None
+        scored.sort(key=lambda t: -t[0])
+        best = scored[0][0]
+        margin = max(_AMBIGUITY_MARGIN, (1.0 - best) * _AMBIGUITY_RELATIVE_FACTOR)
+        close = [s for s in scored if best - s[0] <= margin]
+        if len(close) > 1:
+            raise AmbiguousMatch(
+                f"'line_window' tier: {len(close)} candidate windows score within "
+                f"{margin:.4f} of the best ({best:.3f}) -- too close to tell which "
+                f"one old_string meant")
+        return (scored[0][1], scored[0][2])
 
     def _resolve(self, path: str):
         p = (self.repo / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
