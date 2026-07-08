@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import animal.loop as loop
 from animal.ledger import Ledger
-from animal.model import SYSTEM_PROMPT
+from animal.model import SYSTEM_PROMPT, system_prompt_for
 from animal.types import EventType
 from animal import config
 
@@ -120,8 +120,9 @@ def test_observation_history_bounded_and_condensed():
     assert summary["finished"]
 
     messages = summary["messages"]
-    # the system prompt entry is untouched
-    assert messages[0] == {"role": "system", "content": SYSTEM_PROMPT}
+    # the system prompt entry is untouched (the coder role now uses the #486
+    # search_replace prompt; observation-bounding must never rewrite messages[0])
+    assert messages[0] == {"role": "system", "content": system_prompt_for("coder")}
     # the initial task message is untouched too (not a tool result)
     assert messages[1]["role"] == "user" and messages[1]["content"].startswith("Task:")
 

@@ -102,13 +102,54 @@ def test_json_is_not_in_the_parser_registry():
     assert dialect.JSON not in dialect.EDIT_FORMATS
 
 
-def test_config_roles_default_every_role_to_json_edit_format():
-    # Preserves today's behavior for every role that exists right now -- this
-    # story adds a path, it does not migrate anything onto it.
-    roles = config.ROLES
-    assert len(roles) >= 4
-    for name, rc in roles.items():
-        assert rc["edit_format"] == dialect.JSON, f"role {name} unexpectedly migrated off json"
+def test_search_replace_wired_but_coder_flip_held():
+    # #486: the search_replace turn protocol is fully wired + parse-tested, but the
+    # production coder flip is HELD. A live smoke test showed the SR coder REGRESSES
+    # end-to-end (the json coder solves a one-line bug in 3 turns; the SR coder lands
+    # 0 edits -- it guesses a SEARCH and edits without reading, so read-before-edit
+    # blocks it). #447's parse-success metric measured the wrong thing (parseability,
+    # not landed edits). Roles stay on json until the SR coder's read-first behavior
+    # is fixed; the dialect path exists and is ready.
+    assert dialect.SEARCH_REPLACE in dialect.EDIT_FORMATS       # the path exists
+    for name, rc in config.ROLES.items():
+        assert rc["edit_format"] == dialect.JSON, f"role {name} flipped off json prematurely"
+
+
+# --- #486: the search_replace turn protocol wired into model.py ---
+
+def test_parse_dialect_fenced_edit_becomes_edit_action():
+    from animal.model import ModelPlane
+    mp = ModelPlane()
+    turn = ("fix it\n\n```edit calc.py\n<<<<<<< SEARCH\ndef add(a, b):\n    return a - b\n"
+            "=======\ndef add(a, b):\n    return a + b\n>>>>>>> REPLACE\n```")
+    t = mp._parse_dialect(turn, "search_replace")
+    assert t["action"]["kind"] == "edit" and t["action"]["path"] == "calc.py"
+    assert t["action"]["old_string"] == "def add(a, b):\n    return a - b"   # raw, no JSON escaping
+    assert t["action"]["new_string"] == "def add(a, b):\n    return a + b"
+    assert t["thought"] == "fix it"
+
+
+def test_parse_dialect_bare_json_action_and_wrapper():
+    from animal.model import ModelPlane
+    mp = ModelPlane()
+    bare = mp._parse_dialect('look\n{"kind":"read","path":"calc.py"}', "search_replace")
+    assert bare["action"] == {"kind": "read", "path": "calc.py"} and bare["thought"] == "look"
+    wrapped = mp._parse_dialect('{"thought":"x","action":{"kind":"finish","message":"d"}}', "search_replace")
+    assert wrapped["action"]["kind"] == "finish"
+
+
+def test_system_prompt_selected_by_role_edit_format():
+    from animal.model import system_prompt_for, SYSTEM_PROMPT, SYSTEM_PROMPT_SEARCH_REPLACE
+    assert "SEARCH/REPLACE" in SYSTEM_PROMPT_SEARCH_REPLACE and "SEARCH/REPLACE" not in SYSTEM_PROMPT
+    # system_prompt_for dispatches on the role's edit_format (proven by toggling it)
+    saved = config.ROLES["coder"]["edit_format"]
+    try:
+        config.ROLES["coder"]["edit_format"] = "search_replace"
+        assert system_prompt_for("coder") is SYSTEM_PROMPT_SEARCH_REPLACE
+        config.ROLES["coder"]["edit_format"] = "json"
+        assert system_prompt_for("coder") is SYSTEM_PROMPT
+    finally:
+        config.ROLES["coder"]["edit_format"] = saved
 
 
 if __name__ == "__main__":

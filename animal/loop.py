@@ -71,7 +71,7 @@ from __future__ import annotations
 import json
 from .ledger import Ledger
 from .workspace import Workspace
-from .model import ModelPlane, ModelError, SYSTEM_PROMPT
+from .model import ModelPlane, ModelError, SYSTEM_PROMPT, system_prompt_for
 from .repomap import build_repo_map
 from .sandbox import Sandbox
 from .types import (EventType, ErrorClass, Envelope, action_from_dict, ActionParseError,
@@ -214,7 +214,7 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     # Repo map (Story #449): opt-in, default OFF -- appended to the system
     # prompt so it's part of the FIRST prompt the model sees, letting it
     # request the right file directly instead of groping blind.
-    system_prompt = SYSTEM_PROMPT
+    system_prompt = system_prompt_for(role)
     if include_repo_map:
         system_prompt = system_prompt + "\n\n" + build_repo_map(str(ws.repo))
     messages = [{"role": "system", "content": system_prompt},

@@ -10,7 +10,7 @@ parse failure into a MODEL_FORMAT_ERROR envelope fed back to the model.
 """
 from __future__ import annotations
 import json, re, urllib.request, urllib.error
-from . import config
+from . import config, dialect
 
 # Flat action schema (optional fields per kind); action_from_dict enforces the
 # per-kind required fields downstream, so a wrong shape is a typed error.
@@ -48,6 +48,43 @@ Rules:
 - Finish only when the task is actually done, as shown by the results the harness returned."""
 
 
+# Story #486: the search_replace turn protocol. A local coder produces far fewer
+# broken edits when it writes a fenced SEARCH/REPLACE block (raw newlines/quotes,
+# no JSON escaping) than when it JSON-escapes a multi-line patch into old_string
+# (measured #447: search_replace 12/12 vs json 11/12). Non-edit actions stay a
+# one-line JSON object -- they carry no multi-line code to escape. The kernel parses
+# both into the SAME {thought, action} the loop already consumes.
+SYSTEM_PROMPT_SEARCH_REPLACE = """You are an agent working inside a code workspace. Each turn: a brief thought, then EXACTLY ONE action.
+
+For read / grep / shell / finish, emit a single JSON object:
+- read   {"kind":"read","path":"file.py","offset":0,"limit":200}   view a file window. You MUST read a file before editing it.
+- grep   {"kind":"grep","pattern":"regex","path":"."}
+- shell  {"kind":"shell","argv":["python3","-c","print(1)"]}   argv LIST only — no shell string, no pipes/redirects.
+- finish {"kind":"finish","message":"<what you did>"}   when the task is complete.
+
+To EDIT a file, do NOT use JSON — emit a fenced SEARCH/REPLACE block so you never escape a newline or quote:
+
+```edit path/to/file.py
+<<<<<<< SEARCH
+<the exact existing text to replace, copied verbatim from a prior read>
+=======
+<the replacement text>
+>>>>>>> REPLACE
+```
+
+Rules:
+- Emit ONE action per turn — one JSON object OR one fenced edit block, never both. The harness executes it and returns the REAL result (a computed diff, a real exit code, real file content). Never assume success — read the result before continuing.
+- The SEARCH text must match the file's real content exactly (read the file first). If the harness says the anchor was not found or the edit produced no change, fix your SEARCH text and retry.
+- Finish only when the task is actually done, as shown by the results the harness returned."""
+
+
+def system_prompt_for(role: str) -> str:
+    """The system prompt for a role, chosen by its edit_format (Story #486). A
+    "json" role gets the original JSON-turn prompt unchanged; a "search_replace"
+    role gets the fenced-edit prompt. Any future format falls back to JSON."""
+    return SYSTEM_PROMPT_SEARCH_REPLACE if config.ROLES.get(role, {}).get("edit_format") == "search_replace" else SYSTEM_PROMPT
+
+
 class ModelError(RuntimeError):
     pass
 
@@ -61,13 +98,17 @@ class ModelPlane:
         context-integrity signals. temperature overrides the role default (used by
         candidate sampling for generation diversity). Raises ModelError on failure."""
         rc = config.ROLES[role]
+        edit_format = rc.get("edit_format", "json")
         body = {
             "model": rc["model"], "messages": messages,
             "temperature": rc["temperature"] if temperature is None else temperature,
             "max_tokens": rc["max_tokens"],
-            "response_format": {"type": "json_schema",
-                                "json_schema": {"name": "turn", "strict": True, "schema": TURN_SCHEMA}},
         }
+        if edit_format == "json":
+            # constrained decoding for the JSON turn protocol (Phase-0: 100% parseable).
+            # A dialect role (search_replace) emits free fenced text, so no constraint.
+            body["response_format"] = {"type": "json_schema",
+                                       "json_schema": {"name": "turn", "strict": True, "schema": TURN_SCHEMA}}
         req = urllib.request.Request(
             self.url + "/v1/chat/completions", data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"})
@@ -89,7 +130,8 @@ class ModelPlane:
             "context_overflow": bool(pt) and pt >= ctx,
             "completion_tokens": usage.get("completion_tokens", 0),
         }
-        return self._parse(content), meta
+        parsed = self._parse(content) if edit_format == "json" else self._parse_dialect(content, edit_format)
+        return parsed, meta
 
     def _parse(self, content: str) -> dict:
         m = re.search(r"\{.*\}", content, re.S)   # tolerate fences/prose around the JSON
@@ -101,3 +143,30 @@ class ModelPlane:
         if not isinstance(obj, dict) or "action" not in obj:
             raise ModelError(f"model turn missing 'action': {obj!r}")
         return obj
+
+    def _parse_dialect(self, content: str, edit_format: str) -> dict:
+        """Parse a dialect turn (Story #486) into the SAME {thought, action} the loop
+        consumes. An EDIT is a fenced block parsed by animal.dialect (raw text, no
+        JSON escaping); every other action stays a JSON object. Falls back to the JSON
+        parse for non-edit turns, and tolerates a BARE {"kind":...} action (the dialect
+        prompt asks for the action alone, not the {thought, action} wrapper)."""
+        edits = dialect.parse(edit_format, content)
+        if edits:
+            e = edits[0]                                   # one action per turn: take the first block
+            thought = content[:content.index("```edit")].strip()
+            action = {"kind": "edit", "path": e["path"],
+                      "old_string": e["old_string"], "new_string": e["new_string"]}
+            return {"thought": thought, "action": action}
+        # no fenced edit -> a read/grep/shell/finish JSON action (bare, or wrapped)
+        m = re.search(r"\{.*\}", content, re.S)
+        if not m:
+            raise ModelError(f"dialect turn had neither a fenced edit block nor a JSON action: {content[:200]!r}")
+        try:
+            obj = json.loads(m.group(0))
+        except json.JSONDecodeError as e:
+            raise ModelError(f"dialect non-edit action was not JSON: {e}: {content[:200]!r}") from e
+        if isinstance(obj, dict) and "action" in obj:      # a full {thought, action} wrapper
+            return obj
+        if isinstance(obj, dict) and "kind" in obj:        # a bare action object
+            return {"thought": content[:m.start()].strip(), "action": obj}
+        raise ModelError(f"dialect turn's JSON was neither an action nor a wrapper: {obj!r}")
