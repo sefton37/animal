@@ -72,8 +72,15 @@ class Workspace:
                    GIT_DIR=str(self.gitdir), GIT_WORK_TREE=str(self.repo),
                    GIT_AUTHOR_NAME="animal", GIT_AUTHOR_EMAIL="animal@localhost",
                    GIT_COMMITTER_NAME="animal", GIT_COMMITTER_EMAIL="animal@localhost")
+        # surrogateescape (red-team, third round): -z output carries RAW
+        # filename bytes; a model-created filename with an invalid-UTF-8 byte
+        # made strict decoding raise UnicodeDecodeError from inside every
+        # ShellAction's lint gate, killing the whole run with no envelope and
+        # no SESSION_END. surrogateescape is Python's own filesystem-name
+        # convention: the decoded string round-trips through Path() to the
+        # real file, so nothing crashes and nothing is lost.
         return subprocess.run(["git", *args], env=env, cwd=str(self.repo),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, errors="surrogateescape")
 
     def _git_init(self):
         self.gitdir.parent.mkdir(parents=True, exist_ok=True)
@@ -121,9 +128,23 @@ class Workspace:
 
     def changed_paths(self, tree_a: str, tree_b: str) -> list[str]:
         """Names of paths that differ (added/modified/deleted) between two
-        shadow-git snapshots."""
-        r = self._git("diff", "--name-only", tree_a, tree_b)
-        return [l for l in r.stdout.splitlines() if l]
+        shadow-git snapshots.
+
+        -z (NUL-separated, never quoted): plain `git diff --name-only` applies
+        core.quotePath to any non-ASCII byte in a filename (`"c\\303\\244lc.py"`),
+        so a consumer matching or resolving the printed name silently loses
+        track of that file -- a red-team demonstrated exactly this bypassing
+        worklane's tester-scope gate via a filename with one non-ASCII byte.
+        NUL-separated output is git's raw-bytes contract: no quoting, ever.
+
+        --no-renames (red-team, third round): git's default rename detection
+        reports ONLY the destination name for a detected rename, so a
+        `mv calc.py tests/test_calc.py` collapsed to the destination and the
+        deletion of the implementation file was invisible to worklane's
+        tester-scope gate. --no-renames reports both endpoints (an add + a
+        delete), which is what "which paths changed" actually means here."""
+        r = self._git("diff", "--name-only", "--no-renames", "-z", tree_a, tree_b)
+        return [p for p in r.stdout.split("\0") if p]
 
     def blob_at(self, tree: str, path: str) -> str | None:
         """path's content at a shadow-git snapshot, or None if it didn't exist

@@ -39,6 +39,11 @@ ROLES = {
     # thousands of tokens before it ever emits the schema-constrained JSON content
     # -- 2048 measured empty (finish_reason=length, content="") on a real call.
     "product_owner": {"model": "architect", "max_tokens": 8192, "temperature": 0.2, "num_ctx": 32768, "edit_format": "json"},
+    # Story #458: the tester role authors a failing test (TDD red) before the
+    # implementer runs. It emits edits the same shape/complexity as the coder's
+    # (a new or modified tests/test_*.py file), so it rides the already-
+    # provisioned "coder" GPU seat -- no new GPU seat, no new roster entry.
+    "tester": {"model": "coder", "max_tokens": 2048, "temperature": 0.2, "num_ctx": 32768, "edit_format": "json"},
 }
 
 # Loop bounds (mini-swe-agent-shaped: hard caps, not open-ended).

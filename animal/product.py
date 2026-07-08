@@ -96,6 +96,7 @@ class ProductStore:
         self._ensure_column("stories", "story_points", "INTEGER")
         self._ensure_column("stories", "priority", "INTEGER DEFAULT 0")
         self._ensure_column("spec_checks", "regression", "INTEGER DEFAULT 0")
+        self._ensure_column("spec_checks", "expected_new", "INTEGER DEFAULT 0")
         self._ensure_specs_story_id_not_unique()
         self._ensure_spec_checks_fk_target()
         self.db.commit()
@@ -165,7 +166,7 @@ class ProductStore:
             id INTEGER PRIMARY KEY, spec_id INTEGER NOT NULL, name TEXT NOT NULL,
             argv TEXT NOT NULL, comparator TEXT NOT NULL DEFAULT 'exit_zero',
             stdout_needle TEXT, nondeterministic INTEGER DEFAULT 0,
-            regression INTEGER DEFAULT 0, created TEXT,
+            regression INTEGER DEFAULT 0, expected_new INTEGER DEFAULT 0, created TEXT,
             FOREIGN KEY(spec_id) REFERENCES specs(id))""")
         self.db.execute(
             f"INSERT INTO spec_checks_new453({col_list}) SELECT {col_list} FROM spec_checks")
@@ -298,9 +299,10 @@ class ProductStore:
         for check in spec.dod:
             self.db.execute(
                 "INSERT INTO spec_checks(spec_id, name, argv, comparator, stdout_needle,"
-                " nondeterministic, regression, created) VALUES (?,?,?,?,?,?,?,?)",
+                " nondeterministic, regression, expected_new, created) VALUES (?,?,?,?,?,?,?,?,?)",
                 (spec_row_id, check.name, json.dumps(check.argv), check.comparator,
-                 check.expected, int(check.nondeterministic), int(check.regression), _now()))
+                 check.expected, int(check.nondeterministic), int(check.regression),
+                 int(check.expected_new), _now()))
         self.db.commit()
         return spec_row_id
 
@@ -313,11 +315,12 @@ class ProductStore:
             return None
         envelope = json.loads(row["body"])
         checks = self.db.execute(
-            "SELECT name, argv, comparator, stdout_needle, nondeterministic, regression"
-            " FROM spec_checks WHERE spec_id=? ORDER BY id ASC", (row["id"],)).fetchall()
+            "SELECT name, argv, comparator, stdout_needle, nondeterministic, regression,"
+            " expected_new FROM spec_checks WHERE spec_id=? ORDER BY id ASC", (row["id"],)).fetchall()
         envelope["dod"] = [
             {"name": c[0], "argv": json.loads(c[1]), "comparator": c[2],
-             "expected": c[3] or "", "nondeterministic": bool(c[4]), "regression": bool(c[5])}
+             "expected": c[3] or "", "nondeterministic": bool(c[4]), "regression": bool(c[5]),
+             "expected_new": bool(c[6])}
             for c in checks]
         return Spec.from_dict(envelope)
 

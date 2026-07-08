@@ -35,15 +35,25 @@ class Sandbox:
                 pass
         return "degraded"
 
-    def run(self, argv: list[str], workspace, timeout: int = 120) -> dict:
+    def run(self, argv: list[str], workspace, timeout: int = 120, extra_env: dict | None = None) -> dict:
         """Execute argv in the workspace. Returns a computed result dict (real exit
-        code, captured output, and the sandbox mode actually used)."""
+        code, captured output, and the sandbox mode actually used).
+
+        extra_env (Story #458): optional additional env vars, merged in on top of
+        the base env below -- e.g. worklane's tester-artifact runner sets
+        PYTHONPATH to the workspace root so `python3 tests/test_x.py` (script
+        mode, sys.path[0] = the script's OWN directory) can still `import` a
+        module that lives at the repo root, exactly as `python3 -c "import
+        calc; ..."` (sys.path[0] = cwd) already can. Defaults to None, which
+        preserves today's exact env for every existing caller."""
         ws = str(Path(workspace).resolve())
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": ws,
                "LANG": "C.UTF-8", "TMPDIR": "/tmp",
                # checks are ephemeral: never leave a bytecode cache that could
                # poison a later run's result (reproducibility hygiene)
                "PYTHONDONTWRITEBYTECODE": "1"}
+        if extra_env:
+            env.update(extra_env)
         if self.mode in ("full", "fs_only"):
             net = ["--unshare-net"] if self.mode == "full" else []
             cmd = ["bwrap", *_BASE, "--bind", ws, ws, *net, "--chdir", ws, "--", *argv]

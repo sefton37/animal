@@ -186,7 +186,7 @@ def _two_check_spec(state=SpecState.DRAFT.value) -> Spec:
                  comparator=Comparator.EXIT_ZERO.value),
         DoDCheck(name="check-two", argv=["grep", "-n", "needle", "file.txt"],
                  comparator=Comparator.STDOUT_CONTAINS.value, expected="needle",
-                 nondeterministic=True, regression=True),
+                 nondeterministic=True, regression=True, expected_new=True),
     ]
     return Spec(user_story="As a maker, I want...", intent=["decompose", "ground"],
                 out_of_scope=["unrelated thing"], dod=checks,
@@ -221,6 +221,11 @@ def test_spec_roundtrip_equality():
     assert loaded.dod[1].argv == ["grep", "-n", "needle", "file.txt"]
     assert isinstance(loaded.dod[1].argv, list)
     assert loaded.dod[1].nondeterministic is True and loaded.dod[1].regression is True
+    # #458 red-team fix: EVERY DoDCheck field must round-trip -- expected_new
+    # was silently dropped by the mirror (stored spec reloaded to a spec that
+    # re-rejected at Gate 0a grounding), the same gap class #453 fixed for
+    # `regression`
+    assert loaded.dod[1].expected_new is True
     store.close()
 
 

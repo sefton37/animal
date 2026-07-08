@@ -42,6 +42,15 @@ class DoDCheck:
     expected: str = ""              # for stdout_contains / stdout_absent
     nondeterministic: bool = False  # -> executor runs N=3, all must pass
     regression: bool = False        # opt out of the negative-control (expected to pass pre-work)
+    expected_new: bool = False      # Story #458: this check names a path (e.g. a not-yet-written
+                                     # tests/test_x.py the TDD tester role is about to author) that
+                                     # genuinely does not exist yet at spec-authoring time -- an
+                                     # opt-out analogous to `regression` above, honored by BOTH
+                                     # existence scans: grounding.ground()'s Gate 0a (absence is
+                                     # not recorded as a miss) and dod._lint's missing-helper
+                                     # check at Gate 0b. The negative-control still runs on
+                                     # expected_new checks -- a missing file genuinely fails
+                                     # pre-work -- so the flag can never smuggle in a vacuous check.
 
     def __post_init__(self):
         if not isinstance(self.argv, list) or not self.argv or not all(isinstance(a, str) for a in self.argv):

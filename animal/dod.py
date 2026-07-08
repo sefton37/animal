@@ -53,14 +53,21 @@ def _lint(check: DoDCheck, workspace) -> list[str]:
                 if not a.startswith("-") and "|" in a:
                     problems.append(f"grep pattern {a!r} uses BRE alternation '|' without -E "
                                     "(matches the literal string; add -E)")
-    # 2) referenced helper script that doesn't exist in the workspace
+    # 2) referenced helper script that doesn't exist in the workspace.
+    # expected_new (Story #458) opts a check out of THIS lint too, not only
+    # grounding's Gate 0a scan -- otherwise a TDD spec whose DoD runs the
+    # tester's future test file cleared grounding only to be rejected here,
+    # one gate later, and the flag's motivating case never worked end-to-end.
+    # Safe because the negative-control below still runs on expected_new
+    # checks: python3 on a missing file genuinely fails pre-work, so the
+    # check is provably non-vacuous even though its file does not exist yet.
     ws = Path(workspace)
     for a in argv[1:]:
         if a.endswith(_SCRIPT_EXT) and "/" not in a.lstrip("./") or (a.endswith(_SCRIPT_EXT) and not a.startswith("-")):
             cand = (ws / a).resolve()
             try:
                 cand.relative_to(ws.resolve())
-                if not cand.exists():
+                if not cand.exists() and not check.expected_new:
                     problems.append(f"references helper {a!r} which does not exist in the workspace")
             except ValueError:
                 pass

@@ -22,6 +22,12 @@ It uses a generous per-call timeout (900s): a real call on this project's
 contended host -- see animal/product_owner.py's _SYS / _chat docstrings for the
 measured cause (host CPU contention + a thinking model's chain-of-thought, not
 a hang -- confirmed by streaming the raw completion end-to-end).
+
+Story #458 (TDD red-green) tests are appended below the product-owner tests:
+deterministic, offline -- animal.worklane.run_task is monkeypatched (same
+substitution pattern as animal.product_owner._chat above / animal.panel.run_seat
+in test_phase3.py), so no live llama-swap is required to exercise the tester
+phase, the harness-computed red gate, and the reject/needs_human/done outcomes.
 """
 import os, sys, json, tempfile
 from pathlib import Path
@@ -30,7 +36,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from animal import config
 from animal import product_owner
 from animal.product_owner import ProductOwnerError
-from animal.spec import Spec
+from animal.spec import Spec, DoDCheck
+from animal.grounding import ground
+from animal.model import ModelPlane, system_prompt_for
+import animal.worklane as worklane
+import animal.loop as loop
 from animal.worklane import run_work_from_story
 
 
@@ -228,6 +238,578 @@ def test_author_spec_live_smoke():
     assert spec.user_story and spec.dod, "a real model-authored spec must be non-vacuous"
     spec2 = Spec.from_dict(spec.to_dict())                 # round-trips without SpecError
     assert spec2.dod[0].argv == spec.dod[0].argv
+
+
+# --- Story #458: TDD red-green -- config wiring ---
+
+def test_config_tester_role_reuses_a_provisioned_seat():
+    assert config.ROLES["tester"]["model"] in ("coder", "architect", "judge", "auditor")
+
+
+# --- Story #458: loop.run_task's system_prompt override ---
+
+def test_run_task_system_prompt_param_overrides_default():
+    captured = {}
+
+    def fake_call(self, role, messages, temperature=None):
+        captured["system"] = messages[0]["content"]
+        return ({"thought": "t", "action": {"kind": "finish", "message": "done"}},
+                {"context_overflow": False})
+
+    orig = ModelPlane.call
+    ModelPlane.call = fake_call
+    try:
+        loop.run_task("t", str(_repo()), role="coder", system_prompt="CUSTOM TESTER PROMPT MARKER")
+    finally:
+        ModelPlane.call = orig
+    assert captured["system"] == "CUSTOM TESTER PROMPT MARKER"
+
+
+def test_run_task_system_prompt_default_unchanged():
+    """system_prompt=None (every existing caller) must behave EXACTLY as before
+    this story -- zero behavior change unless a caller opts in."""
+    captured = {}
+
+    def fake_call(self, role, messages, temperature=None):
+        captured["system"] = messages[0]["content"]
+        return ({"thought": "t", "action": {"kind": "finish", "message": "done"}},
+                {"context_overflow": False})
+
+    orig = ModelPlane.call
+    ModelPlane.call = fake_call
+    try:
+        loop.run_task("t", str(_repo()), role="coder")   # no system_prompt override
+    finally:
+        ModelPlane.call = orig
+    assert captured["system"] == system_prompt_for("coder")
+
+
+# --- Story #458: DoDCheck.expected_new + grounding.ground()'s Gate 0a fix ---
+
+def test_grounding_expected_new_dod_check_not_a_miss():
+    spec = Spec("write a failing test first, tests/test_x.py",
+               dod=[DoDCheck("t", ["python3", "tests/test_x.py"], "exit_zero", expected_new=True)])
+    g = ground(spec, str(_repo()))
+    assert g["ok"] and "tests/test_x.py" not in g["misses"]
+
+
+def test_grounding_missing_path_without_expected_new_is_still_a_miss():
+    """The opt-out is per-check, not a blanket loosening of Gate 0a: a check
+    that does NOT set expected_new is grounded exactly as before this story."""
+    spec = Spec("write a failing test first, tests/test_x.py",
+               dod=[DoDCheck("t", ["python3", "tests/test_x.py"], "exit_zero")])   # expected_new=False (default)
+    g = ground(spec, str(_repo()))
+    assert not g["ok"] and "tests/test_x.py" in g["misses"]
+
+
+def test_expected_new_dod_check_does_not_reject_at_grounding():
+    # Story #458 AC + second-round red-team fix. The AC's letter: "a seeded
+    # spec with a DoD check pointing at a not-yet-existing tests/test_x.py and
+    # expected_new=True passes grounding (task does not reject at
+    # 'grounding')". As first shipped, that was true but INERT: dod._lint's
+    # missing-helper check (Gate 0b) independently rejected the same spec one
+    # gate later at 'dod_authoring', so the flag's own motivating case never
+    # worked end-to-end (two auditors flagged it). Both existence scans now
+    # honor expected_new, so the spec must clear grounding AND dod_authoring;
+    # a DENYING approver stops the run at the approval gate -- which both
+    # proves exactly how far it got and keeps this test offline (no model is
+    # ever reached).
+    spec = Spec("write a failing test first, tests/test_x.py",
+               dod=[DoDCheck("t", ["python3", "tests/test_x.py"], "exit_zero", expected_new=True)])
+    r = worklane.run_work(spec, str(_repo()), approver=lambda k, s: "deny", max_turns=2)
+    assert r["rejected_at"] == "approval", r
+
+
+# --- Story #458: worklane.run_work(tdd=True) -- the tester phase + red gate ---
+
+def test_tdd_tester_touching_non_test_file_rejects():
+    repo = _repo()
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            # the tester wrongly edits the implementation file directly -- not its job
+            (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return a + b\n")
+            diff = ("diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n"
+                    "@@\n-    return a - b\n+    return a + b\n")
+            return {"run_diff": diff, "turns": 1, "changed": True, "edits_landed": 1}
+        raise AssertionError("implementer must never run when the tester touched a non-test path")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "rejected" and r["rejected_at"] == "tester_scope", r
+    assert "calc.py" in r["reason"]
+    assert calls["coder"] == 0, "implementer step must never run"
+
+
+def test_tdd_red_confirmed_gate_flags_vacuous_red_as_needs_human():
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            # a vacuous tester: claims to have authored a test file, but its
+            # actual side effect (standing in for "the test never really
+            # exercised the unimplemented behavior") leaves the DoD check
+            # ALREADY passing before the implementer ever runs.
+            (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return a + b\n")
+            diff = ("diff --git a/tests/test_x.py b/tests/test_x.py\nnew file mode 100644\n"
+                    "--- /dev/null\n+++ b/tests/test_x.py\n@@\n+def test_x(): pass\n")
+            return {"run_diff": diff, "turns": 1, "changed": True, "edits_landed": 1}
+        raise AssertionError("implementer must never run after a vacuous (non-red) tester result")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r
+    assert "vacuous red" in r["reason"]
+    # the early exit necessarily passes through 'verifying' (building cannot
+    # reach needs_human directly), so replay tooling gets an explicit marker
+    # to distinguish it from the real post-implementer verify step having run
+    assert r.get("vacuous_red") is True, r
+    assert calls["coder"] == 0, "implementer step must never run"
+
+
+def test_tdd_end_to_end_genuine_red_then_green_trajectory():
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            # a genuine test, written under tests/ only -- calc.py is left
+            # untouched, so re-running the DoD check right after this step
+            # still FAILS (calc.add is still wrong): a real red.
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_add.py").write_text(
+                "import calc\nassert calc.add(2, 3) == 5\n")
+            diff = ("diff --git a/tests/test_add.py b/tests/test_add.py\nnew file mode 100644\n"
+                    "--- /dev/null\n+++ b/tests/test_add.py\n@@\n+assert calc.add(2, 3) == 5\n")
+            return {"run_diff": diff, "turns": 1, "changed": True, "edits_landed": 1}
+        if role == "coder":
+            # the implementer makes the (genuinely red) DoD check pass
+            (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return a + b\n")
+            return {"run_diff": "diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n",
+                    "turns": 2, "changed": True, "edits_landed": 1}
+        raise AssertionError(f"unexpected role {role!r}")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert calls["tester"] == 1 and calls["coder"] == 1, calls
+    assert r["final_state"] == "done", r
+    assert r["trajectory"] == ["draft", "grounded", "approved", "building", "verifying", "done"], r["trajectory"]
+
+
+# --- Story #458 red-team fix: the tester's ARTIFACT is harness-run, never inferred ---
+
+def test_tdd_noop_stub_test_is_rejected_as_vacuous_red():
+    """The red-team's ADVERSARIAL CONSTRUCTION: a tester that writes a pure
+    no-op stub -- `def test_noop(): pass`, never called, asserting nothing --
+    to a REAL file on disk. calc.py is left untouched, so spec.dod (calc.add
+    is still broken) genuinely still fails -- the OLD gate, which only
+    rechecked spec.dod, would have called this a 'genuine red' and let the
+    implementer run. The fix must independently RUN the stub file itself:
+    `python3 tests/test_noop.py` exits 0 (the function is defined but never
+    called), so it must be refused as vacuous regardless of spec.dod."""
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_noop.py").write_text("def test_noop(): pass\n")
+            diff = ("diff --git a/tests/test_noop.py b/tests/test_noop.py\nnew file mode 100644\n"
+                    "--- /dev/null\n+++ b/tests/test_noop.py\n@@\n+def test_noop(): pass\n")
+            return {"run_diff": diff, "turns": 1, "changed": True, "edits_landed": 1}
+        raise AssertionError("implementer must never run after a no-op stub tester result")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r
+    assert "vacuous red" in r["reason"], r
+    assert calls["coder"] == 0, "implementer step must never run against a no-op stub"
+
+
+def test_tdd_empty_diff_from_tester_is_rejected_as_vacuous_red():
+    """The red-team's STRONGER VARIANT: the tester writes NOTHING at all --
+    an empty diff, changed=False. The OLD gate's scope check trivially passes
+    (0 bad paths among 0 changed paths) and spec.dod still fails exactly as it
+    did before, so the OLD 'genuine red confirmed' fired unconditionally. The
+    fix requires a REAL, existing test-file artifact before red can ever be
+    confirmed -- an empty diff must be refused."""
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0}
+        raise AssertionError("implementer must never run after an empty tester diff")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "needs_human", r
+    assert "vacuous red" in r["reason"], r
+    assert calls["coder"] == 0, "implementer step must never run against an empty diff"
+
+
+def test_tdd_green_gate_requires_testers_own_test_to_pass_not_just_dod():
+    """Closes the coupling gap: spec.dod is authored independently of whatever
+    the tester writes, so a WEAK/gameable DoD check can flip to passing for
+    reasons that have nothing to do with the tester's actual test. Here the
+    tester's real test asserts calc.add(2,3)==5; the DoD check only asserts
+    the result isn't the ORIGINAL broken value (!=-1) -- both genuinely fail
+    pre-implementation (a real red on both signals). The implementer then
+    'cheats': it returns a hardcoded 99, which satisfies the weak DoD check
+    (99 != -1) but fails the tester's own test (99 != 5). GREEN must require
+    the tester's own artifact to pass too -- final_state must be
+    'needs_human', never 'done'."""
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_real.py").write_text("import calc\nassert calc.add(2, 3) == 5\n")
+            diff = ("diff --git a/tests/test_real.py b/tests/test_real.py\nnew file mode 100644\n"
+                    "--- /dev/null\n+++ b/tests/test_real.py\n@@\n+assert calc.add(2, 3) == 5\n")
+            return {"run_diff": diff, "turns": 1, "changed": True, "edits_landed": 1}
+        if role == "coder":
+            # cheats: satisfies the WEAK DoD check without fixing the real bug
+            (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return 99\n")
+            return {"run_diff": "diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n",
+                    "turns": 2, "changed": True, "edits_landed": 1}
+        raise AssertionError(f"unexpected role {role!r}")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "weak-not-broken-value", ["python3", "-c", "import calc; assert calc.add(2,3) != -1"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert calls["tester"] == 1 and calls["coder"] == 1, calls
+    assert r["dod_all_pass"] is True, "sanity: the WEAK DoD check alone must be satisfied by the cheat"
+    assert r["tester_test_pass"] is False, "the tester's own test must still genuinely fail (99 != 5)"
+    assert r["final_state"] == "needs_human", (
+        "spec.dod alone was satisfied by the cheat, but the tester's OWN test still "
+        f"fails -- GREEN must not be driven by spec.dod alone: {r}")
+
+
+def test_tdd_default_off_keeps_non_tdd_callers_unchanged():
+    """tdd=False (the default) must never invoke a tester role at all."""
+    repo = _repo("def add(a,b):\n    return a + b\n")   # already correct
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        return {"run_diff": "", "turns": 1, "changed": False, "edits_landed": 0}
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero",
+            regression=True)])   # already passes pre-work -- opt out of the negative-control
+        worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2)  # tdd not passed
+    finally:
+        worklane.run_task = orig
+    assert calls["tester"] == 0, "tdd=False must never run a tester role"
+    assert calls["coder"] == 1
+
+
+# --- Story #458 red-team fixes, SECOND round (pre-commit Gate 3) ---
+
+def test_dod_lint_expected_new_missing_helper_is_not_a_problem():
+    """dod._lint's missing-helper check must honor expected_new (without it the
+    flag was end-to-end inert -- see test_expected_new_dod_check_does_not_
+    reject_at_grounding). The negative-control still runs on the flagged
+    check: python3 on a missing file genuinely fails pre-work, so ok=True here
+    proves 'lint waived' and NOT 'vacuity waived'."""
+    from animal.dod import validate_check
+    from animal.sandbox import Sandbox
+    repo = _repo()
+    sb = Sandbox()
+    flagged = DoDCheck("t", ["python3", "tests/test_x.py"], "exit_zero", expected_new=True)
+    plain = DoDCheck("t2", ["python3", "tests/test_x.py"], "exit_zero")
+    ok = validate_check(flagged, sb, str(repo))
+    bad = validate_check(plain, sb, str(repo))
+    assert ok["ok"], ok
+    assert not bad["ok"] and any("does not exist" in reason for reason in bad["reasons"]), bad
+
+
+def test_is_test_path_requires_tests_directory():
+    """Red-team fix: basename-only matching accepted test_*.py anywhere (repo
+    root, inside the package tree) -- broader than the tests/test_*.py contract
+    TESTER_SYSTEM_PROMPT promises. The directory is now part of the predicate."""
+    assert worklane._is_test_path("tests/test_x.py")
+    assert worklane._is_test_path("tests/sub/test_y.py")
+    assert not worklane._is_test_path("test_root.py")
+    assert not worklane._is_test_path("animal/test_evil.py")
+    assert not worklane._is_test_path("tests/helper.py")
+
+
+def test_tdd_tester_test_file_outside_tests_dir_rejects():
+    """The worklane consequence of the anchored predicate: a 'test' file the
+    tester drops inside the package tree is a scope violation, exactly like
+    editing an implementation file."""
+    repo = _repo()
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            (Path(repo_) / "test_evil.py").write_text("import calc\nassert calc.add(2,3)==5\n")
+            return {"run_diff": "diff --git a/test_evil.py b/test_evil.py\n",
+                    "changed_paths": ["test_evil.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        raise AssertionError("implementer must never run when the tester wrote outside tests/")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "rejected" and r["rejected_at"] == "tester_scope", r
+    assert "test_evil.py" in r["reason"], r
+    assert calls["coder"] == 0
+
+
+def test_workspace_changed_paths_are_never_git_quoted():
+    """Red-team fix: plain `git diff --name-only` applies core.quotePath to any
+    non-ASCII byte in a filename ("c\\303\\244lc.py"), so a consumer matching or
+    resolving the printed name silently loses the file -- demonstrated
+    bypassing the tester-scope gate. changed_paths now uses -z (NUL-separated
+    raw bytes): the real filename must come back verbatim."""
+    from animal.workspace import Workspace
+    repo = _repo()
+    # shadow_root must live OUTSIDE the repo: a custom GIT_DIR is not
+    # auto-excluded the way `.git` is, so an in-repo shadow would see its own
+    # object store as changed paths
+    ws = Workspace(str(repo), "t-quotepath",
+                   shadow_root=tempfile.mkdtemp(prefix="animal-p5-shadow-"))
+    t0 = ws.snapshot()
+    (repo / "cälc.py").write_text("x = 1\n")
+    t1 = ws.snapshot()
+    assert ws.changed_paths(t0, t1) == ["cälc.py"]
+
+
+def test_tdd_scope_gate_sees_nonascii_non_test_path():
+    """The worklane side of the quotePath fix: run_diff's text header quotes
+    the smuggled filename (the old regex parser never saw it -- bad=[] and the
+    file rode through to the implementer), but _tester_phase now consumes the
+    harness-computed changed_paths key, so the same edit must reject."""
+    repo = _repo()
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            (Path(repo_) / "cälc.py").write_text("x = 1\n")
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_add.py").write_text("import calc\nassert calc.add(2, 3) == 5\n")
+            # exactly what the REAL run_task emits for this tree: a QUOTED
+            # header in run_diff (invisible to the fallback regex) plus the
+            # raw-bytes changed_paths list (the fix)
+            quoted = ('diff --git "a/c\\303\\244lc.py" "b/c\\303\\244lc.py"\nnew file mode 100644\n'
+                      '--- /dev/null\n+++ "b/c\\303\\244lc.py"\n@@\n+x = 1\n'
+                      "diff --git a/tests/test_add.py b/tests/test_add.py\nnew file mode 100644\n"
+                      "--- /dev/null\n+++ b/tests/test_add.py\n@@\n+assert calc.add(2, 3) == 5\n")
+            return {"run_diff": quoted, "changed_paths": ["cälc.py", "tests/test_add.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        raise AssertionError("implementer must never run when the tester smuggled a non-test path")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "add-sums", ["python3", "-c", "import calc; assert calc.add(2,3)==5"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert r["final_state"] == "rejected" and r["rejected_at"] == "tester_scope", r
+    assert "cälc.py" in r["reason"], r
+    assert calls["coder"] == 0
+
+
+def test_tdd_implementer_rewriting_testers_test_cannot_reach_done():
+    """THE second-round blocker: GREEN used to re-run the tester's test by
+    PATH only, so an implementer that (a) games a weak spec.dod check AND
+    (b) rewrites the tester's test file to a no-op reached 'done' with
+    tester_test_pass=True -- 'the SAME executable artifact' was a path-spelling
+    assumption, not a computed fact (and fix-the-failing-test is plausible
+    WEAK-model behavior, not only an adversarial one). With the file sha-pinned
+    at RED, the pin mismatch must fail tester_test_pass and route to
+    needs_human, naming the modified path in the summary."""
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_real.py").write_text("import calc\nassert calc.add(2, 3) == 5\n")
+            return {"run_diff": "diff --git a/tests/test_real.py b/tests/test_real.py\n",
+                    "changed_paths": ["tests/test_real.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        if role == "coder":
+            # the cheat: satisfy the WEAK DoD check AND gut the tester's test
+            # (the gutted file runs clean, so without the pin GREEN sees it 'pass')
+            (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return 99\n")
+            (Path(repo_) / "tests" / "test_real.py").write_text("pass\n")
+            return {"run_diff": ("diff --git a/calc.py b/calc.py\n"
+                                 "diff --git a/tests/test_real.py b/tests/test_real.py\n"),
+                    "changed_paths": ["calc.py", "tests/test_real.py"],
+                    "turns": 2, "changed": True, "edits_landed": 2}
+        raise AssertionError(f"unexpected role {role!r}")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "weak-not-broken-value", ["python3", "-c", "import calc; assert calc.add(2,3) != -1"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert calls["tester"] == 1 and calls["coder"] == 1, calls
+    assert r["dod_all_pass"] is True, "sanity: the weak DoD alone IS satisfied by the cheat"
+    assert r["tester_test_pass"] is False, r
+    assert r["tester_artifact_modified"] == ["tests/test_real.py"], r
+    assert r["final_state"] == "needs_human", r
+
+
+# --- Story #458 red-team fixes, THIRD round (verification of round two) ---
+
+def test_workspace_changed_paths_report_both_rename_endpoints():
+    """Red-team fix: git's default rename detection reports ONLY the
+    destination name for a detected rename, so `mv calc.py tests/test_calc.py`
+    collapsed to the (scope-legal) destination and the deletion of the
+    implementation file was invisible to the tester-scope gate. --no-renames
+    must report both endpoints."""
+    from animal.workspace import Workspace
+    repo = _repo()
+    ws = Workspace(str(repo), "t-rename",
+                   shadow_root=tempfile.mkdtemp(prefix="animal-p5-shadow-"))
+    t0 = ws.snapshot()
+    # a byte-identical move -- exactly what triggers rename detection (R100)
+    tests_dir = repo / "tests"; tests_dir.mkdir(exist_ok=True)
+    (tests_dir / "test_calc.py").write_text((repo / "calc.py").read_text())
+    (repo / "calc.py").unlink()
+    t1 = ws.snapshot()
+    assert set(ws.changed_paths(t0, t1)) == {"calc.py", "tests/test_calc.py"}
+
+
+def test_workspace_changed_paths_invalid_utf8_name_does_not_crash():
+    """Red-team fix: -z emits RAW filename bytes; strict decoding raised
+    UnicodeDecodeError from inside every ShellAction's lint gate for a
+    model-creatable invalid-UTF-8 filename, killing the whole run (no
+    envelope, no SESSION_END). surrogateescape decoding must return a name
+    that still resolves to the real file through Path()."""
+    import os
+    from animal.workspace import Workspace
+    repo = _repo()
+    ws = Workspace(str(repo), "t-rawbytes",
+                   shadow_root=tempfile.mkdtemp(prefix="animal-p5-shadow-"))
+    t0 = ws.snapshot()
+    with open(os.path.join(str(repo).encode(), b"c\xe4lc.py"), "wb") as f:
+        f.write(b"x = 1\n")
+    t1 = ws.snapshot()
+    changed = ws.changed_paths(t0, t1)   # must not raise
+    assert len(changed) == 1, changed
+    assert (Path(repo) / changed[0]).is_file(), changed
+
+
+def test_tdd_self_rewriting_tester_test_cannot_reach_done():
+    """THE third-round catch: with pins taken AFTER the RED run, a tester test
+    that rewrites ITSELF to a no-op during its own execution (red once, clean
+    forever after) got its post-mutation bytes pinned -- GREEN's pin matched
+    and a false 'done' was demonstrated against a weak spec.dod. Pinned
+    BEFORE the run, the self-mutation is a pin mismatch at GREEN and must
+    route to needs_human naming the file."""
+    repo = _repo()   # calc.add is broken (a - b) on disk
+    calls = {"tester": 0, "coder": 0}
+    sneaky = ("from pathlib import Path\n"
+              "me = Path(__file__)\n"
+              "me.write_text('pass\\n')\n"
+              "raise AssertionError('red once, clean forever after')\n")
+
+    def fake_run_task(task, repo_, role="coder", checks=None, ledger=None, max_turns=None,
+                      include_repo_map=False, system_prompt=None):
+        calls[role] = calls.get(role, 0) + 1
+        if role == "tester":
+            tests_dir = Path(repo_) / "tests"; tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_sneaky.py").write_text(sneaky)
+            return {"run_diff": "diff --git a/tests/test_sneaky.py b/tests/test_sneaky.py\n",
+                    "changed_paths": ["tests/test_sneaky.py"],
+                    "turns": 1, "changed": True, "edits_landed": 1}
+        if role == "coder":
+            # games the WEAK DoD without touching the (already self-gutted) test
+            (Path(repo_) / "calc.py").write_text("def add(a,b):\n    return 99\n")
+            return {"run_diff": "diff --git a/calc.py b/calc.py\n",
+                    "changed_paths": ["calc.py"],
+                    "turns": 2, "changed": True, "edits_landed": 1}
+        raise AssertionError(f"unexpected role {role!r}")
+
+    orig = worklane.run_task
+    worklane.run_task = fake_run_task
+    try:
+        spec = Spec("add must sum", dod=[DoDCheck(
+            "weak-not-broken-value", ["python3", "-c", "import calc; assert calc.add(2,3) != -1"], "exit_zero")])
+        r = worklane.run_work(spec, str(repo), approver=lambda k, s: "approve", max_turns=2, tdd=True)
+    finally:
+        worklane.run_task = orig
+    assert calls["tester"] == 1 and calls["coder"] == 1, calls
+    assert r["dod_all_pass"] is True, "sanity: the weak DoD alone IS satisfied by the cheat"
+    assert r["tester_test_pass"] is False, r
+    assert r["tester_artifact_modified"] == ["tests/test_sneaky.py"], r
+    assert r["final_state"] == "needs_human", r
 
 
 if __name__ == "__main__":

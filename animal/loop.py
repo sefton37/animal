@@ -66,6 +66,14 @@ candidates.sample_candidates both default their own `include_repo_map` kwarg
 to True and forward it here; cli.py's `run` subcommand adds a `--no-repo-map`
 opt-out flag (default: included). Only run_task's bare signature default
 remains False, purely to keep this module directly testable without the flag.
+
+System prompt override (Story #458): an optional `system_prompt` param lets a
+caller substitute the whole system prompt -- e.g. worklane's TDD tester phase,
+which needs a role-specific prompt ("write ONE failing test, touch no
+implementation file") instead of the generic prompt `system_prompt_for` would
+otherwise return for that role. Defaults to None, which preserves today's
+exact behavior (system_prompt_for(role)) for every existing caller -- zero
+behavior change unless a caller opts in.
 """
 from __future__ import annotations
 import json
@@ -200,7 +208,8 @@ def _collapse_observations(messages: list[dict], keep: int = 5) -> list[dict]:
 
 def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | None = None,
              ledger_dir=None, max_turns: int | None = None, ledger: Ledger | None = None,
-             temperature: float | None = None, include_repo_map: bool = False) -> dict:
+             temperature: float | None = None, include_repo_map: bool = False,
+             system_prompt: str | None = None) -> dict:
     L = ledger or Ledger(ledger_dir=ledger_dir)   # work lane shares one ledger across the chain
     ws = Workspace(repo, L.session_id)
     mp = ModelPlane()
@@ -214,10 +223,13 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     # Repo map (Story #449): opt-in, default OFF -- appended to the system
     # prompt so it's part of the FIRST prompt the model sees, letting it
     # request the right file directly instead of groping blind.
-    system_prompt = system_prompt_for(role)
+    # System prompt override (Story #458): system_prompt=None (every existing
+    # caller) preserves today's exact behavior; a caller that passes one
+    # substitutes it wholesale, before the repo map is appended.
+    prompt_text = system_prompt if system_prompt is not None else system_prompt_for(role)
     if include_repo_map:
-        system_prompt = system_prompt + "\n\n" + build_repo_map(str(ws.repo))
-    messages = [{"role": "system", "content": system_prompt},
+        prompt_text = prompt_text + "\n\n" + build_repo_map(str(ws.repo))
+    messages = [{"role": "system", "content": prompt_text},
                 {"role": "user", "content": f"Task: {task}\n\nBegin. Emit one action."}]
 
     edits_landed, finished = 0, False
@@ -343,6 +355,13 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     # whole-run computed diff (evidence, independent of any claim)
     t1 = ws.snapshot()
     run_diff = ws.diff_trees(t0, t1)
+    # changed paths, harness-computed via `git diff --name-only -z` (Story #458
+    # red-team fix): a consumer that needs WHICH paths changed must not parse
+    # run_diff's text headers -- core.quotePath quotes non-ASCII filenames
+    # there, and a regex over quoted headers silently drops the file (a
+    # demonstrated bypass of worklane's tester-scope gate). This list is the
+    # raw-bytes contract.
+    changed_paths = ws.changed_paths(t0, t1)
 
     # harness-run checks: the REAL result, regardless of what the model claimed
     check_results = []
@@ -360,7 +379,7 @@ def run_task(task: str, repo: str, role: str = "coder", checks: list[dict] | Non
     summary = {
         "session_id": L.session_id, "finished": finished, "turns": turn_no + 1,
         "edits_landed": edits_landed, "run_diff": run_diff, "stop_reason": stop_reason,
-        "changed": bool(run_diff.strip()), "checks": check_results,
+        "changed": bool(run_diff.strip()), "changed_paths": changed_paths, "checks": check_results,
         "sandbox_mode": sb.mode, "ledger": str(L.path),
     }
     L.append(EventType.SESSION_END, summary)
