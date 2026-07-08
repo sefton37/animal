@@ -47,6 +47,13 @@ def main(argv=None):
         h = watchdogs.health()
         for c in h["checks"]:
             print(f"  {'ok  ' if c['ok'] else 'FAIL'} {c['name']}: {c['detail']}")
+        print("=== product store (local backlog) ===")
+        from .product import ProductStore
+        ps = ProductStore()
+        ec = ps.db.execute("SELECT COUNT(*) FROM epics").fetchone()[0]
+        sc = ps.db.execute("SELECT COUNT(*) FROM stories").fetchone()[0]
+        print(f"  {ec} epics / {sc} stories (the work lane populates this as specs land)")
+        ps.close()
         print("healthy:", h["healthy"])
         return 0
     return 2
