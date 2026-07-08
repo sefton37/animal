@@ -16,11 +16,20 @@ LLAMA_SWAP_URL = os.environ.get("ANIMAL_LLAMA_SWAP", "http://127.0.0.1:8890")
 # role -> (llama-swap model name, call params). Measured seat configs live in the
 # roster yaml; these are the request-side params. max_tokens is generous for
 # reasoning seats (gpt-oss's trace precedes its content — Phase-0 lesson).
+#
+# edit_format (Story #447): a per-role property naming which dialect that
+# role's edits are emitted in -- "json" keeps today's TURN_SCHEMA/
+# response_format path in model.py completely unchanged (the default, and the
+# only value any role uses today); any other value names a key in
+# animal.dialect.EDIT_FORMATS (e.g. "search_replace", "whole_file") whose
+# fenced-text parser feeds animal.types.action_from_dict the same way. See
+# animal/dialect.py + the dated edit-format eval markdown alongside it for the
+# measured parse-success numbers this default is based on.
 ROLES = {
-    "coder":     {"model": "coder",      "max_tokens": 2048, "temperature": 0.2, "num_ctx": 32768},
-    "architect": {"model": "architect",  "max_tokens": 2048, "temperature": 0.3, "num_ctx": 32768},
-    "judge":     {"model": "judge",      "max_tokens": 1024, "temperature": 0.0, "num_ctx": 8192},
-    "auditor":   {"model": "auditor",    "max_tokens": 512,  "temperature": 0.0, "num_ctx": 8192},
+    "coder":     {"model": "coder",      "max_tokens": 2048, "temperature": 0.2, "num_ctx": 32768, "edit_format": "json"},
+    "architect": {"model": "architect",  "max_tokens": 2048, "temperature": 0.3, "num_ctx": 32768, "edit_format": "json"},
+    "judge":     {"model": "judge",      "max_tokens": 1024, "temperature": 0.0, "num_ctx": 8192,  "edit_format": "json"},
+    "auditor":   {"model": "auditor",    "max_tokens": 512,  "temperature": 0.0, "num_ctx": 8192,  "edit_format": "json"},
 }
 
 # Loop bounds (mini-swe-agent-shaped: hard caps, not open-ended).

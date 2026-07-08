@@ -1,0 +1,169 @@
+{
+  "summary": {
+    "search_replace": {
+      "n": 12,
+      "ok": 12
+    },
+    "whole_file": {
+      "n": 12,
+      "ok": 10
+    },
+    "json": {
+      "n": 12,
+      "ok": 11
+    }
+  },
+  "elapsed_s": 126.8,
+  "detail": {
+    "search_replace": [
+      {
+        "task": "f1.py",
+        "ok": true
+      },
+      {
+        "task": "f2.py",
+        "ok": true
+      },
+      {
+        "task": "f3.py",
+        "ok": true
+      },
+      {
+        "task": "f4.py",
+        "ok": true
+      },
+      {
+        "task": "f5.py",
+        "ok": true
+      },
+      {
+        "task": "f6.py",
+        "ok": true
+      },
+      {
+        "task": "f7.py",
+        "ok": true
+      },
+      {
+        "task": "f8.py",
+        "ok": true
+      },
+      {
+        "task": "f9.py",
+        "ok": true
+      },
+      {
+        "task": "f10.py",
+        "ok": true
+      },
+      {
+        "task": "f11.py",
+        "ok": true
+      },
+      {
+        "task": "f12.py",
+        "ok": true
+      }
+    ],
+    "whole_file": [
+      {
+        "task": "f1.py",
+        "ok": true
+      },
+      {
+        "task": "f2.py",
+        "ok": true
+      },
+      {
+        "task": "f3.py",
+        "ok": false
+      },
+      {
+        "task": "f4.py",
+        "ok": true
+      },
+      {
+        "task": "f5.py",
+        "ok": true
+      },
+      {
+        "task": "f6.py",
+        "ok": true
+      },
+      {
+        "task": "f7.py",
+        "ok": false
+      },
+      {
+        "task": "f8.py",
+        "ok": true
+      },
+      {
+        "task": "f9.py",
+        "ok": true
+      },
+      {
+        "task": "f10.py",
+        "ok": true
+      },
+      {
+        "task": "f11.py",
+        "ok": true
+      },
+      {
+        "task": "f12.py",
+        "ok": true
+      }
+    ],
+    "json": [
+      {
+        "task": "f1.py",
+        "ok": true
+      },
+      {
+        "task": "f2.py",
+        "ok": true
+      },
+      {
+        "task": "f3.py",
+        "ok": false
+      },
+      {
+        "task": "f4.py",
+        "ok": true
+      },
+      {
+        "task": "f5.py",
+        "ok": true
+      },
+      {
+        "task": "f6.py",
+        "ok": true
+      },
+      {
+        "task": "f7.py",
+        "ok": true
+      },
+      {
+        "task": "f8.py",
+        "ok": true
+      },
+      {
+        "task": "f9.py",
+        "ok": true
+      },
+      {
+        "task": "f10.py",
+        "ok": true
+      },
+      {
+        "task": "f11.py",
+        "ok": true
+      },
+      {
+        "task": "f12.py",
+        "ok": true
+      }
+    ]
+  }
+}
