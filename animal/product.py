@@ -101,6 +101,11 @@ class ProductStore:
         # session re-ingested must never duplicate its epic -- the store is a
         # PROJECTION of the ledger, calibration.py's framing)
         self._ensure_column("epics", "source_key", "TEXT")
+        # #470: a distinct VALUE field (WSJF numerator) -- NOT priority, which
+        # is the ASC ordering signal `backlog list` already uses. Overloading
+        # priority as value made two sibling views sort the same field in
+        # opposite directions (the Gate-3 blocker). value is its own column.
+        self._ensure_column("stories", "value", "INTEGER DEFAULT 0")
         self._ensure_specs_story_id_not_unique()
         self._ensure_spec_checks_fk_target()
         self.db.commit()
@@ -227,25 +232,28 @@ class ProductStore:
 
     def create_story(self, epic_id: int, title: str, user_story: str | None = None,
                       story_points: int | None = None, priority: int = 0,
-                      status: str = "backlog") -> int:
+                      status: str = "backlog", value: int = 0) -> int:
         self._validate_points(story_points)
+        self._validate_value(value)
         cur = self.db.execute(
-            "INSERT INTO stories(epic_id, title, user_story, story_points, priority, status, created)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (epic_id, title, user_story, story_points, priority, status, _now()))
+            "INSERT INTO stories(epic_id, title, user_story, story_points, priority, status, value, created)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (epic_id, title, user_story, story_points, priority, status, value, _now()))
         self.db.commit()
         return cur.lastrowid
 
     def get_story(self, story_id: int) -> dict | None:
         row = self.db.execute(
-            "SELECT id, epic_id, title, user_story, story_points, priority, status, created"
+            "SELECT id, epic_id, title, user_story, story_points, priority, status, value, created"
             " FROM stories WHERE id=?", (story_id,)).fetchone()
         return self._story_row(row) if row else None
 
     def update_story(self, story_id: int, **fields) -> None:
         if "story_points" in fields:
             self._validate_points(fields["story_points"])
-        allowed = {"epic_id", "title", "user_story", "story_points", "priority", "status"}
+        if "value" in fields:
+            self._validate_value(fields["value"])
+        allowed = {"epic_id", "title", "user_story", "story_points", "priority", "status", "value"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return
@@ -254,7 +262,7 @@ class ProductStore:
         self.db.commit()
 
     def list_backlog(self, epic_id: int | None = None, status: str | None = None) -> list[dict]:
-        query = ("SELECT id, epic_id, title, user_story, story_points, priority, status, created"
+        query = ("SELECT id, epic_id, title, user_story, story_points, priority, status, value, created"
                  " FROM stories")
         clauses, params = [], []
         if epic_id is not None:
@@ -268,6 +276,13 @@ class ProductStore:
         return [self._story_row(r) for r in rows]
 
     @staticmethod
+    def _validate_value(value) -> None:
+        # #470 audit (minor): a negative value is not a real WSJF numerator --
+        # it would produce a negative, unflagged ratio. Reject it at the store.
+        if value is not None and value < 0:
+            raise ProductError(f"value={value!r} must be >= 0 (WSJF numerator)")
+
+    @staticmethod
     def _validate_points(story_points) -> None:
         if story_points is not None and story_points not in FIBONACCI_POINTS:
             raise ProductError(
@@ -276,7 +291,8 @@ class ProductStore:
     @staticmethod
     def _story_row(row) -> dict:
         return {"id": row[0], "epic_id": row[1], "title": row[2], "user_story": row[3],
-                "story_points": row[4], "priority": row[5], "status": row[6], "created": row[7]}
+                "story_points": row[4], "priority": row[5], "status": row[6], "value": row[7],
+                "created": row[8]}
 
     # ------------------------------------------------------------------
     # spec + DoD persistence (#453) -- round-trips animal/spec.py's Spec/

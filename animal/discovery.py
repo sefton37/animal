@@ -88,9 +88,8 @@ propose_story requires a non-empty title AND narrative. Propose each distinct
 story separately. Finish when the topic is decomposed."""
 
 
-class MakerAbsent(Exception):
-    """Raised by a channel when there is no maker to answer (EOF, dead pipe).
-    The harness halts the session on this -- it never fabricates an answer."""
+from .human import MakerAbsent  # canonical in human.py (#468 shares the transport); re-exported
+                                # so discovery.MakerAbsent keeps working for every existing caller
 
 
 def _story_text(raw_story: dict) -> str:

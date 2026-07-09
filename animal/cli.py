@@ -24,23 +24,40 @@ def main(argv=None):
     d.add_argument("topic")
     d.add_argument("--repo", default=None, help="run the full pipeline against this repo, persisting an epic + grounded specs")
     d.add_argument("--max-turns", type=int, default=None)
+    sz = sub.add_parser("size", help="size a backlog story with the diverse-model planning-poker panel (#467-471); wide disagreement escalates to YOU")
+    sz.add_argument("story_id", type=int)
+    sz.add_argument("--threshold", type=int, default=3,
+                    help="index-distance disagreement at/over which the panel escalates to the human (default 3)")
+    sz.add_argument("--channel-test", default=None, dest="channel_test",
+                    help="TESTING ONLY: a scripted human reply for the escalation channel (bypasses the TUI)")
     sub.add_parser("learn", help="inspect the learning plane (calibration, lessons, incidents, health) — read-only")
     b = sub.add_parser("backlog", help="read/write the local product backlog (epics + stories) — #452 CRUD")
-    bsub = b.add_subparsers(dest="backlog_cmd", required=True)
+    # bare `animal backlog` -> the prioritized view (#471 audit: an argparse
+    # usage error is not an answer to "show me my backlog")
+    bsub = b.add_subparsers(dest="backlog_cmd", required=False)
     be = bsub.add_parser("add-epic", help="create an epic")
     be.add_argument("title")
-    be.add_argument("--priority", type=int, default=0)
+    be.add_argument("--priority", type=int, default=0,
+                    help="ORDERING signal, ascending (P1 = top); NOT the value used by `backlog prioritized`")
     bs = bsub.add_parser("add-story", help="create a story under an epic (Fibonacci-validated points)")
     bs.add_argument("epic_id", type=int)
     bs.add_argument("title")
     bs.add_argument("--user-story", default=None)
     bs.add_argument("--points", type=int, default=None, dest="story_points")
-    bs.add_argument("--priority", type=int, default=0)
+    bs.add_argument("--priority", type=int, default=0,
+                    help="ORDERING signal, ascending (P1 = top); distinct from --value")
+    bs.add_argument("--value", type=int, default=0,
+                    help="business VALUE (WSJF numerator), higher = more valuable; feeds `backlog prioritized`")
+    bsv = bsub.add_parser("set-value", help="set a story's business value (WSJF numerator) — the remedy for an 'unvalued' story")
+    bsv.add_argument("story_id", type=int)
+    bsv.add_argument("value", type=int)
     bl = bsub.add_parser("list", help="list backlog stories (optionally filtered)")
     bl.add_argument("--epic-id", type=int, default=None)
     bl.add_argument("--status", default=None)
     ble = bsub.add_parser("list-epics", help="list epics (optionally filtered by status)")
     ble.add_argument("--status", default=None)
+    bp = bsub.add_parser("prioritized", help="the backlog ordered by value/effort (WSJF-lite, harness-computed) — #470")
+    bp.add_argument("--epic-id", type=int, default=None)
     args = ap.parse_args(argv)
 
     if args.cmd == "run":
@@ -86,6 +103,35 @@ def main(argv=None):
         died = status in ("model_error", "maker_absent", "channel_error", "context_overflow")
         return 1 if (died and not stories) else 0
 
+    if args.cmd == "size":
+        from . import poker, estimates
+        from .product import ProductStore
+        from .ledger import Ledger
+        st = ProductStore()
+        story = st.get_story(args.story_id)
+        if story is None:
+            print(json.dumps({"error": f"no story {args.story_id}"}))
+            return 1
+        L = Ledger()
+        votes = poker.run_panel(story)
+        vote_list = [v["points"] for v in votes.values()]
+        reasons = {k: v["reasoning"] for k, v in votes.items()}
+        approvals = (lambda k, s_: args.channel_test) if args.channel_test is not None else None
+        r = poker.converge(story, vote_list, approvals=approvals,
+                           threshold=args.threshold, ledger=L, reasons=reasons,
+                           channel_name=("channel-test" if args.channel_test is not None else None))
+        estimates.record_panel_run(args.story_id, votes, r["points"], r["disagreement"],
+                                   r["escalated"])
+        if r["points"] is not None:
+            st.update_story(args.story_id, story_points=r["points"])
+        summary = {"story_id": args.story_id, "title": story["title"], "votes": votes,
+                   "median": r["median"], "disagreement": r["disagreement"],
+                   "escalated": r["escalated"], "points": r["points"],
+                   **({"reply": r["reply"]} if "reply" in r else {})}
+        print(json.dumps(summary, indent=2))
+        # an unresolved size (all-abstain + no usable human reply) is a failure
+        return 0 if r["points"] is not None else 1
+
     if args.cmd == "learn":
         from .calibration import Calibration
         from .lessons import Lessons
@@ -115,6 +161,30 @@ def main(argv=None):
         print("healthy:", h["healthy"])
         return 0
 
+    if args.cmd == "backlog" and getattr(args, "backlog_cmd", None) in (None, "prioritized"):
+        from .backlog import prioritized
+        from .product import ProductStore
+        st = ProductStore()
+        epic = getattr(args, "epic_id", None)
+        rows = prioritized(st, epic_id=epic)
+        st.close()
+        if not rows:
+            print("(no workable stories — try `animal backlog list` to see all)")
+            return 0
+        print(f"{'id':>4}  {'ratio':>6}  {'val':>3}  {'pts':>3}  {'flag':<16} title")
+        remedied = []
+        for r in rows:
+            print(f"{r['id']:>4}  {str(r['ratio'] if r['ratio'] is not None else '-'):>6}  "
+                  f"{r['value']:>3}  {str(r['points'] if r['points'] is not None else '-'):>3}  "
+                  f"{(r['flag'] or ''):<16} {r['title']}")
+            if r.get("remedy"):
+                remedied.append(f"  #{r['id']} ({r['flag']}): {r['remedy']}")
+        if remedied:
+            print("\nto rank the flagged stories:")
+            for line in remedied:
+                print(line)
+        return 0
+
     if args.cmd == "backlog":
         from .product import ProductStore, ProductError
         ps = ProductStore()
@@ -124,8 +194,12 @@ def main(argv=None):
                 print(f"epic #{eid} created: {args.title}")
             elif args.backlog_cmd == "add-story":
                 sid = ps.create_story(args.epic_id, args.title, user_story=args.user_story,
-                                       story_points=args.story_points, priority=args.priority)
+                                       story_points=args.story_points, priority=args.priority,
+                                       value=args.value)
                 print(f"story #{sid} created under epic #{args.epic_id}: {args.title}")
+            elif args.backlog_cmd == "set-value":
+                ps.update_story(args.story_id, value=args.value)
+                print(f"story #{args.story_id} value set to {args.value}")
             elif args.backlog_cmd == "list":
                 for s in ps.list_backlog(epic_id=args.epic_id, status=args.status):
                     pts = s["story_points"] if s["story_points"] is not None else "-"
