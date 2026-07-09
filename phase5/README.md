@@ -90,3 +90,79 @@ ANIMAL_LIVE_MODEL_TEST=1 python3 tests/test_phase5.py   # runs the live smoke fo
 
 Live use: `worklane.run_tdd_work("story", repo, approver=...)` with llama-swap
 up on :8890 (`phase0/llama-swap.roster.yaml`).
+
+---
+
+# M6 — The Timeboxed Sprint (the lifecycle animal is named for)
+
+Given a review deadline, animal turns a prioritized, Fibonacci-pointed backlog
+into real done/needs_human/rejected outcomes — iterating the M3 gated chain,
+stopping *cleanly* at the deadline, and handing back one reviewable package.
+**Exit criterion MET — proven live against real models.**
+
+## What's built (`animal/`)
+
+| Piece | Story | Role |
+|-------|-------|------|
+| `velocity.py` | #472 | How long a Fibonacci size ACTUALLY took, measured strictly from a run ledger's own `session_start`→`session_end` timestamps — never a caller-read clock (the 2026-04-20 flaky-timing incident was exactly an uninjected clock). `estimate_seconds` returns a NAMED, SPECULATED conservative default until real data exists, then the historical mean — more honest with every completion. A negative span (clock skew) is refused loudly, never a poisoned fact. |
+| `scheduler.py` | #473 | `select_for_deadline(items, budget, estimate_fn)` — greedy by priority DESC, cheapest-first among equals (to land MORE items), a deterministic partition of the backlog. `estimate_fn` is injected, so the scheduler is pure arithmetic over harness-measured durations — no store, no model, no clock. `budget≤0` defers everything. |
+| `sprint.py` | #474 | `run_sprint` iterates the REAL `worklane.run_work` chain over the scheduled queue. The budget is RE-CHECKED before each story: a started story runs to completion (never aborted mid-build); an unstarted story past the deadline is deferred. `now_fn` and `runner` are injected (the sprint's tests never touch a live model). Each story's state is written back exactly once; velocity is recorded only for stories that actually ran. |
+| `review.py` | #475 | `assemble_review` + `to_markdown` — the package a maker reads in minutes instead of a ledger archaeology session. A real conservation check (no story in two buckets, none duplicated). Each needs_human/rejected story renders its failed DoD checks and ledger session id — the *why* and *where to look*, on the page. |
+| `cli.py sprint` | #475 | `animal sprint --repo R --deadline (+Nm\|ISO8601) [--out D]` — runs the whole sprint and writes the JSON + markdown package. |
+
+Named deviations from the pre-M2 story text (both are the roadmap's own
+"extend M2, don't fork" correction): the sprint takes M2's `ProductStore`, not
+a new `BacklogStore`/`var/backlog.db`; tests run directly (`python3 tests/…`),
+not via pytest (not installed by design).
+
+## Exit criterion — MET (live dogfood, real models, no mocks)
+
+A backlog of **three genuinely-buggy `calc.py` functions** seeded with distinct
+Fibonacci points/priority, run under a deadline whose conservative default
+velocity forces a deferral:
+
+```
+$ printf 'y\ny\ny\n' | animal sprint --repo REPO --deadline +80m --out OUT
+
+# Sprint review
+**2 pts done** of 10 given (5 pts deferred); 54s used of 80.0m budget.
+## finished
+- story #1 — done (2 pts, 31s)
+    - evidence: ledger session 32bdc00e9dff (3 turns)
+- story #2 — needs_human (3 pts, 23s)
+    - failed DoD: double
+    - evidence: ledger session 10b6cc53d925 (3 turns)
+## deferred
+- story #3 — 5 pts — did not fit the deadline budget
+```
+
+The run is honest, not a happy path: **story #2 genuinely failed** — the coder
+model *renamed* `double` to `multiply` instead of fixing it, so `calc.double`
+vanished and the DoD check `assert calc.double(4)==8` failed. The harness
+caught the wrong-thing-done and marked it `needs_human` with the failed check
+named — the evidence-over-prose thesis, live: a model that "solved" the task
+in a contract-breaking way does not get called done.
+
+Velocity landed two real samples from the run's OWN ledger timestamps (not a
+test fixture):
+
+```
+$ sqlite3 var/learning.db "SELECT spec_id, points, seconds, session_id FROM velocity"
+spec-2387cb17|2|31.182315|32bdc00e9dff
+spec-063b80a4|3|23.206029|10b6cc53d925
+$ sqlite3 var/learning.db "SELECT COUNT(*) FROM velocity"
+2
+```
+
+Backlog states written back exactly once (done / needs_human / deferred); the
+review package's points conserve (2 done + 5 deferred, with the 3-pt
+needs_human story surfaced in `points_attempted`, nothing hidden). The full
+offline suite stayed green across the live run — no code was hand-patched to
+make the dogfood pass.
+
+## Run it
+
+```
+for f in tests/test_velocity.py tests/test_scheduler.py tests/test_sprint.py tests/test_review.py; do python3 $f; done
+animal sprint --repo REPO --deadline +2h --out var/   # live, with llama-swap up on :8890
+```

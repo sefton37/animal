@@ -11,6 +11,15 @@ uses decorrelated model families to both **judge** premises (95% recall / 0% FP)
 and **generate** fixes (patch farm 6/6 vs 5/6 single-attempt) (P3), and **learns
 from verified outcomes** — routing on measured track records and compiling earned
 lessons into regression guards (P4). 38 tests green.
+
+**The app layer (M3–M6) is built on the engine:** a maker *talks to* animal to make
+software — conversational **discovery** turns one sentence into grounded stories
+(M4), a diverse-model planning-poker panel **sizes** them in Fibonacci with human
+escalation on disagreement (M5), and a **deadline-boxed sprint** iterates the gated
+TDD chain over the prioritized backlog, stops cleanly at the review deadline, and
+hands back a single review package — *here is what I finished, here is what I could
+not, and why* (M6). Every milestone ends in a live dogfood against real local
+models. See [`phase5/`](phase5/README.md).
 See [`phase0/PHASE0-EXIT.md`](phase0/PHASE0-EXIT.md), [`phase1/`](phase1/README.md),
 [`phase2/`](phase2/README.md), [`phase3/`](phase3/README.md), [`phase4/`](phase4/README.md).
 

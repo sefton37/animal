@@ -30,6 +30,11 @@ def main(argv=None):
                     help="index-distance disagreement at/over which the panel escalates to the human (default 3)")
     sz.add_argument("--channel-test", default=None, dest="channel_test",
                     help="TESTING ONLY: a scripted human reply for the escalation channel (bypasses the TUI)")
+    sp = sub.add_parser("sprint", help="run a deadline-boxed sprint over the backlog, iterate the gated chain, emit a review package (#472-476)")
+    sp.add_argument("--repo", required=True)
+    sp.add_argument("--deadline", required=True,
+                    help="ISO8601 timestamp, or a relative +Nm / +Nh / +Ns from now")
+    sp.add_argument("--out", default=None, help="directory for the review package (default: var/)")
     sub.add_parser("learn", help="inspect the learning plane (calibration, lessons, incidents, health) — read-only")
     b = sub.add_parser("backlog", help="read/write the local product backlog (epics + stories) — #452 CRUD")
     # bare `animal backlog` -> the prioritized view (#471 audit: an argparse
@@ -131,6 +136,43 @@ def main(argv=None):
         print(json.dumps(summary, indent=2))
         # an unresolved size (all-abstain + no usable human reply) is a failure
         return 0 if r["points"] is not None else 1
+
+    if args.cmd == "sprint":
+        import re, time
+        from datetime import datetime, timezone
+        from . import config
+        from pathlib import Path
+        from .product import ProductStore
+        from .sprint import run_sprint
+        from .review import assemble_review, to_markdown
+        m = re.fullmatch(r"\+(\d+)([smh])", args.deadline.strip())
+        if m:
+            mult = {"s": 1, "m": 60, "h": 3600}[m.group(2)]
+            deadline_ts = time.time() + int(m.group(1)) * mult
+        else:
+            try:
+                dt = datetime.fromisoformat(args.deadline)
+                # a naive ISO string is read as UTC (matches _real_now's UTC
+                # epoch), so a maker's '2026-07-09T06:00' is not silently
+                # shifted by the host's local offset
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                deadline_ts = dt.timestamp()
+            except ValueError:
+                print(json.dumps({"error": f"bad --deadline {args.deadline!r} (use ISO8601 or +Nm/+Nh/+Ns)"}))
+                return 1
+        st = ProductStore()
+        result = run_sprint(st, deadline_ts, args.repo)
+        st.close()
+        review = assemble_review(result)
+        md = to_markdown(review)
+        out_dir = Path(args.out) if args.out else config.VAR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "sprint-review.json").write_text(json.dumps(review, indent=2))
+        (out_dir / "sprint-review.md").write_text(md)
+        print(md)
+        print(f"\n(review package written to {out_dir}/sprint-review.{{json,md}})")
+        return 0
 
     if args.cmd == "learn":
         from .calibration import Calibration
